@@ -1,0 +1,78 @@
+import {SpecAuthor} from "../lib/agents.mh"
+import {ConsolidationPrompt} from "../lib/prompts.mh"
+import {Specs, ReviewAction} from "../lib/contracts.mh"
+
+// Fase 3: consolidação das specs globais, Definition of Done e conclusão.
+partial workflow AgileSpecStory stage consolidation {
+    step DraftConsolidation timeout 12m {
+        if (review_round == attempt && review_action == ReviewAction.Revise) {
+            goto PrepareRevision
+        }
+
+        Specs.same(project_folder, project)
+        Specs.same(story_folder, story)
+
+        var data = json.stringify({
+            project_dir,
+            story_id,
+            project,
+            story,
+            implementation,
+            verification
+        })
+
+        var raw = SpecAuthor.run(repo: project_dir, prompt: ConsolidationPrompt(data: data))
+
+        self.consolidated = Specs.consolidation(raw, project, story, story_id)
+
+        Specs.same(project_folder, project)
+        Specs.same(story_folder, story)
+
+        Specs.artifact(review_folder, "consolidation.json", {before: project, files: consolidated})
+    }
+
+    step ApproveConsolidation {
+        if (review_round == attempt && review_action == ReviewAction.Revise) {
+            goto PrepareRevision
+        }
+
+        if (consolidation_approved_round != attempt || dod_confirmed_round != attempt) {
+            pause(
+                "Revise ${review_folder}/consolidation.json e a Definition of Done. " +
+                "Retome com consolidation_approved_round=${attempt} e " +
+                "dod_confirmed_round=${attempt} somente após atender todos os critérios."
+            )
+        }
+    }
+
+    step PublishConsolidation {
+        Specs.same(story_folder, story)
+
+        Specs.apply(project_folder, project, consolidated)
+
+        self.completion_before = {"backlog.md": consolidated["backlog.md"]}
+        self.completion_after = {"backlog.md": Specs.finish(consolidated["backlog.md"], story_id)}
+    }
+
+    step MarkDone {
+        Specs.apply(project_folder, completion_before, completion_after)
+
+        Specs.artifact(review_folder, "done.json", {
+            story_id,
+            attempt,
+            spec_round,
+            verification,
+            manual_validation_approved: true,
+            consolidation_approved_round,
+            dod_confirmed_round
+        })
+
+        self.status = "done"
+
+        goto Done
+    }
+
+    step Done {
+        complete()
+    }
+}

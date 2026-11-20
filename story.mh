@@ -1,0 +1,97 @@
+import {Specs, ReviewAction, SpecificationMode} from "lib/contracts.mh"
+
+import "story/specification.mh"
+import "story/implementation.mh"
+import "story/consolidation.mh"
+
+export partial workflow AgileSpecStory {
+    description: "Entrega uma história AgileSpec com especificação aprovada, implementação, testes, revisão humana e consolidação."
+
+    input project_dir: string
+    input story_id: string
+    input verify_command: string[]
+
+    input specification_mode: SpecificationMode = SpecificationMode.Existing
+    input ui_changes: bool = false
+    input database_changes: bool = false
+    input specs_approved_round: number = 0
+
+    input review_action: ReviewAction = ReviewAction.Pending
+    input review_round: number = 0
+    input feedback: string = ""
+    input revise_specs: bool = false
+
+    input consolidation_approved_round: number = 0
+    input dod_confirmed_round: number = 0
+
+    input max_attempts: number = 3
+
+    var project_folder = ""
+    var story_folder = ""
+    var review_folder = ""
+
+    var project = {}
+    var story_before = {}
+    var story = {}
+
+    var spec_round = 1
+    var attempt = 0
+
+    var implementation = {}
+    var verification = {}
+    var consolidated = {}
+
+    var completion_before = {}
+    var completion_after = {}
+
+    var status = "in_progress"
+
+    output: {
+        story_id,
+        status,
+        attempts: attempt,
+        specification_round: spec_round,
+        implementation,
+        verification,
+        review_artifacts: review_folder
+    }
+
+    entry step LoadContext {
+        Specs.story_id(story_id)
+
+        if (!dir.exists(project_dir)) {
+            fail("project_dir must be an existing directory")
+        }
+
+        if (verify_command.is_empty()) {
+            fail("verify_command is required")
+        }
+
+        if (max_attempts < 1 || max_attempts > 20 || !"${max_attempts}".matches("[1-9][0-9]*")) {
+            fail("max_attempts must be an integer between 1 and 20")
+        }
+
+        self.project_folder = fs.join(project_dir, "AgileSpec", "project")
+        self.story_folder = fs.join(project_dir, "AgileSpec", "stories", "story${story_id}")
+        self.review_folder = fs.join(project_dir, ".agilespec-mhl", "story${story_id}")
+
+        self.project = Specs.read(project_folder, Specs.project_names(), true)
+        Specs.pending(project["backlog.md"], story_id)
+
+        self.story_before = Specs.read(
+            story_folder,
+            ["acceptance.md", "design.md", "views.md", "tables.md"],
+            false
+        )
+
+        if (specification_mode == SpecificationMode.Draft) {
+            goto DraftSpecification
+        }
+
+        self.story = Specs.story(story_folder, ui_changes, database_changes)
+
+        Specs.artifact(review_folder, "specification-1.json", {files: story})
+
+        goto ApproveSpecification
+    }
+}

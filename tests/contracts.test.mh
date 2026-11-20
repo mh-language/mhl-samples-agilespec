@@ -1,0 +1,140 @@
+import {Specs, Verification} from "../lib/contracts.mh"
+import {Fixtures} from "fixtures.mh"
+
+test contracts {
+    describe completes_only_selected_story_and_is_idempotent {
+        var backlog = "1. [ ] One\n11. [ ] Eleven\n2. [x] Two\n"
+        var done = Specs.finish(backlog, "1")
+
+        are_equal(done, "1. [x] One\n11. [ ] Eleven\n2. [x] Two\n")
+        are_equal(Specs.finish(done, "1"), done)
+    }
+
+    describe rejects_path_traversal_in_story_id {
+        var message = ""
+
+        try {
+            Specs.story_id("../1")
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("positive integer"))
+    }
+
+    describe rejects_duplicate_backlog_entries {
+        var message = ""
+
+        try {
+            Specs.entry("1. [ ] One\n1. [ ] Duplicate", "1")
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("Expected one backlog entry"))
+    }
+
+    describe rejects_unknown_and_missing_proposal_documents {
+        var message = ""
+
+        try {
+            Specs.documents("{\"files\":{\"../escape.md\":\"bad\"}}", ["design.md"], ["design.md"])
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("Unexpected document"))
+
+        message = ""
+
+        try {
+            Specs.documents("{\"files\":{}}", ["design.md"], ["design.md"])
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("Missing proposed document"))
+    }
+
+    describe requires_normal_and_edge_cases {
+        var message = ""
+
+        try {
+            Specs.acceptance("## Normal Case\nOnly happy path")
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("Edge Cases"))
+    }
+
+    describe replay_after_partial_apply_is_safe_and_concurrent_edits_fail {
+        var root = Fixtures.project()
+        var folder = fs.join(root, "candidate")
+
+        dir.create(folder)
+
+        var before = {"one.md": "old", "two.md": "old2"}
+        var after = {"one.md": "approved", "two.md": "approved2"}
+
+        fs.write(fs.join(folder, "one.md"), "approved")
+        fs.write(fs.join(folder, "two.md"), "old2")
+
+        Specs.apply(folder, before, after)
+        Specs.apply(folder, before, after)
+
+        are_equal(fs.read(fs.join(folder, "two.md")), "approved2")
+
+        fs.write(fs.join(folder, "two.md"), "concurrent edit")
+
+        var message = ""
+
+        try {
+            Specs.apply(folder, before, after)
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("Concurrent edit"))
+        are_equal(fs.read(fs.join(folder, "two.md")), "concurrent edit")
+    }
+
+    describe unchanged_documents_are_also_protected {
+        var root = Fixtures.project()
+        var folder = fs.join(root, "candidate")
+
+        dir.create(folder)
+        fs.write(fs.join(folder, "one.md"), "original")
+        fs.write(fs.join(folder, "two.md"), "unauthorized")
+
+        var message = ""
+
+        try {
+            Specs.apply(folder, {"one.md": "original", "two.md": "original2"}, {"one.md": "approved"})
+        } catch (e) {
+            message = "${e}"
+        }
+
+        is_true(message.contains("Concurrent edit"))
+        are_equal(fs.read(fs.join(folder, "one.md")), "original")
+    }
+
+    describe failed_command_is_data_and_argv_does_not_invoke_a_shell {
+        var root = Fixtures.project()
+
+        var result = Verification.execute(
+            root,
+            [
+                "python3",
+                "-c",
+                "import sys; print(sys.argv[1]); sys.exit(7)",
+                "$(touch should-not-exist)"
+            ]
+        )
+
+        is_false(result.passed)
+        are_equal(result.exit_code, 7)
+        is_true(result.stdout.contains("$(touch should-not-exist)"))
+        is_false(fs.exists(fs.join(root, "should-not-exist")))
+    }
+}

@@ -1,0 +1,96 @@
+import {StoryImplementer} from "../lib/agents.mh"
+import {ImplementationPrompt} from "../lib/prompts.mh"
+import {Specs, Verification, ReviewAction} from "../lib/contracts.mh"
+
+// Fase 2: tentativas de implementação, verificação e revisão humana.
+partial workflow AgileSpecStory stage implementation {
+    step StartAttempt {
+        self.attempt = attempt + 1
+    }
+
+    step Implement timeout 35m {
+        Specs.same(project_folder, project)
+        Specs.same(story_folder, story)
+
+        var data = json.stringify({
+            project_dir,
+            story_id,
+            project,
+            story,
+            attempt,
+            feedback,
+            verify_command
+        })
+
+        var raw = StoryImplementer.run(repo: project_dir, prompt: ImplementationPrompt(data: data))
+
+        self.implementation = Specs.report(raw)
+
+        Specs.same(project_folder, project)
+        Specs.same(story_folder, story)
+
+        Specs.artifact(review_folder, "implementation-${attempt}.json", implementation)
+    }
+
+    step Verify timeout 12m {
+        self.verification = Verification.execute(project_dir, verify_command)
+
+        Specs.same(project_folder, project)
+        Specs.same(story_folder, story)
+
+        Specs.artifact(review_folder, "verification-${attempt}.json", verification)
+    }
+
+    step ReviewImplementation {
+        if (review_round != attempt || review_action == ReviewAction.Pending) {
+            pause(
+                "Revise código, implementation-${attempt}.json e " +
+                "verification-${attempt}.json em ${review_folder}. Valide manualmente. " +
+                "Retome com review_round=${attempt} e review_action=Approve, Revise ou Reject."
+            )
+        }
+
+        if (review_action == ReviewAction.Reject) {
+            goto Rejected
+        }
+
+        if (review_action == ReviewAction.Revise) {
+            goto PrepareRevision
+        }
+
+        if (!verification.passed) {
+            fail("Cannot approve: automated tests failed. Resume with review_action=Revise and feedback.")
+        }
+
+        if (implementation.status != "ready") {
+            fail("Cannot approve: implementation is blocked. Request revision with clarification.")
+        }
+
+        goto DraftConsolidation
+    }
+
+    step PrepareRevision {
+        if (feedback.trim().is_empty()) {
+            fail("Revision requires human feedback")
+        }
+
+        if (attempt >= max_attempts) {
+            fail("Revision limit reached (${max_attempts}); start a new session after reviewing scope")
+        }
+
+        if (revise_specs) {
+            self.spec_round = spec_round + 1
+            self.story_before = story
+
+            goto DraftSpecification
+        }
+
+        goto StartAttempt
+    }
+
+    step Rejected {
+        self.status = "rejected"
+
+        break "Story ${story_id} rejected by human review; backlog remains pending"
+    }
+}

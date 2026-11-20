@@ -1,0 +1,283 @@
+import {AgileSpecStory} from "../story.mh"
+import {Fixtures} from "fixtures.mh"
+
+test story_lifecycle {
+    describe existing_specs_wait_for_human_before_any_implementation {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(
+            inputs: {
+                project_dir: root,
+                story_id: "1",
+                verify_command: Fixtures.command()
+            }
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(result.executed, ["LoadContext", "ApproveSpecification"])
+        is_false(fs.exists(fs.join(root, "src")))
+    }
+
+    describe draft_specs_are_not_published_before_approval {
+        var root = Fixtures.project()
+        var path = fs.join(root, "AgileSpec", "stories", "story1", "design.md")
+        var before = fs.read(path)
+
+        var result = AgileSpecStory.run(
+            inputs: {
+                project_dir: root,
+                story_id: "1",
+                verify_command: Fixtures.command(),
+                specification_mode: "Draft",
+                ui_changes: true,
+                database_changes: true
+            }
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(result.executed, ["LoadContext", "DraftSpecification", "ApproveSpecification"])
+        are_equal(fs.read(path), before)
+        is_false(fs.exists(fs.join(root, "AgileSpec", "stories", "story1", "tables.md")))
+    }
+
+    describe optional_specs_are_required_when_change_is_declared {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(inputs: Fixtures.approved(root) with {ui_changes: true})
+
+        are_equal(result.state, "failed")
+        are_equal(result.step, "LoadContext")
+        is_true(result.error.contains("views.md"))
+    }
+
+    describe implementation_waits_for_manual_review {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(
+            inputs: {
+                project_dir: root,
+                story_id: "1",
+                verify_command: Fixtures.command(),
+                specs_approved_round: 1
+            }
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(
+            result.executed,
+            [
+                "LoadContext",
+                "ApproveSpecification",
+                "PublishStorySpecs",
+                "StartAttempt",
+                "Implement",
+                "Verify",
+                "ReviewImplementation"
+            ]
+        )
+        is_true(result.vars.verification.passed)
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "backlog.md")).contains("1. [ ]"))
+    }
+
+    describe completion_requires_both_consolidation_and_dod_approval {
+        var root = Fixtures.project()
+        var inputs = Fixtures.approved(root) with {dod_confirmed_round: 0}
+
+        var result = AgileSpecStory.run(inputs: inputs)
+
+        are_equal(result.state, "paused")
+        are_equal(result.executed[result.executed.size() - 1], "ApproveConsolidation")
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "backlog.md")).contains("1. [ ]"))
+    }
+
+    describe approved_story_consolidates_then_marks_only_itself_done {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(inputs: Fixtures.approved(root))
+
+        are_equal(result.state, "completed")
+        are_equal(
+            result.executed,
+            [
+                "LoadContext",
+                "ApproveSpecification",
+                "PublishStorySpecs",
+                "StartAttempt",
+                "Implement",
+                "Verify",
+                "ReviewImplementation",
+                "DraftConsolidation",
+                "ApproveConsolidation",
+                "PublishConsolidation",
+                "MarkDone",
+                "Done"
+            ]
+        )
+        are_equal(result.output.status, "done")
+        are_equal(result.output.attempts, 1)
+
+        var backlog = fs.read(fs.join(root, "AgileSpec", "project", "backlog.md"))
+
+        is_true(backlog.contains("1. [x]"))
+        is_true(backlog.contains("11. [ ]"))
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "architecture.md")).contains("src/feature.txt"))
+        is_true(fs.exists(fs.join(root, "AgileSpec", "stories", "story1", "acceptance.md")))
+    }
+
+    describe ui_and_database_changes_are_consolidated {
+        var root = Fixtures.project()
+        var inputs = Fixtures.approved(root) with {
+            specification_mode: "Draft",
+            ui_changes: true,
+            database_changes: true
+        }
+
+        var result = AgileSpecStory.run(inputs: inputs)
+
+        are_equal(result.state, "completed")
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "ui.md")).contains("Feature view"))
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "database.md")).contains("Feature table"))
+    }
+
+    describe rejection_keeps_backlog_pending {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(inputs: Fixtures.approved(root) with {review_action: "Reject"})
+
+        are_equal(result.state, "broke")
+        are_equal(result.output.status, "rejected")
+        are_equal(result.executed[result.executed.size() - 1], "Rejected")
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "backlog.md")).contains("1. [ ]"))
+    }
+
+    describe code_revision_invalidates_previous_review_round {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(
+            inputs: Fixtures.approved(root) with {
+                review_action: "Revise",
+                feedback: "Fix invalid inputs"
+            }
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(result.vars.attempt, 2)
+        are_equal(result.executed.filter((step) -> step == "Implement").size(), 2)
+        are_equal(result.executed[result.executed.size() - 1], "ReviewImplementation")
+    }
+
+    describe changed_specs_require_new_specification_approval {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(
+            inputs: Fixtures.approved(root) with {
+                review_action: "Revise",
+                feedback: "Clarify boundaries",
+                revise_specs: true
+            }
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(result.vars.spec_round, 2)
+        are_equal(result.vars.attempt, 1)
+        are_equal(result.executed[result.executed.size() - 1], "ApproveSpecification")
+    }
+
+    describe revision_requires_feedback_and_obeys_attempt_limit {
+        var root = Fixtures.project()
+
+        var missing = AgileSpecStory.run(inputs: Fixtures.approved(root) with {review_action: "Revise"})
+
+        are_equal(missing.state, "failed")
+        is_true(missing.error.contains("feedback"))
+
+        var bounded = AgileSpecStory.run(
+            inputs: Fixtures.approved(root) with {
+                review_action: "Revise",
+                feedback: "Fix",
+                max_attempts: 1
+            }
+        )
+
+        are_equal(bounded.state, "failed")
+        is_true(bounded.error.contains("Revision limit"))
+    }
+
+    describe failing_tests_cannot_be_approved {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(
+            inputs: Fixtures.approved(root) with {
+                verify_command: ["python3", "-c", "raise SystemExit(2)"]
+            }
+        )
+
+        are_equal(result.state, "failed")
+        are_equal(result.step, "ReviewImplementation")
+        is_true(result.error.contains("tests failed"))
+    }
+
+    describe blocked_implementation_cannot_be_approved {
+        var root = Fixtures.project()
+        Fixtures.mode(root, "blocked")
+
+        var result = AgileSpecStory.run(inputs: Fixtures.approved(root))
+
+        are_equal(result.state, "failed")
+        is_true(result.error.contains("implementation is blocked"))
+    }
+
+    describe implementation_cannot_change_global_specs {
+        var root = Fixtures.project()
+        Fixtures.mode(root, "mutate-spec")
+
+        var result = AgileSpecStory.run(inputs: Fixtures.approved(root))
+
+        are_equal(result.state, "failed")
+        are_equal(result.step, "Implement")
+        is_true(result.error.contains("Specification changed"))
+    }
+
+    describe discrepancies_and_pending_dod_prevent_consolidation {
+        var root = Fixtures.project()
+        Fixtures.mode(root, "discrepancy")
+
+        var discrepancy = AgileSpecStory.run(inputs: Fixtures.approved(root))
+
+        are_equal(discrepancy.state, "failed")
+        are_equal(discrepancy.step, "DraftConsolidation")
+        is_true(discrepancy.error.contains("discrepancies"))
+
+        var other = Fixtures.project()
+        Fixtures.mode(other, "pending-dod")
+
+        var pending = AgileSpecStory.run(inputs: Fixtures.approved(other))
+
+        are_equal(pending.state, "failed")
+        is_true(pending.error.contains("Unmet Definition of Done"))
+    }
+
+    describe consolidation_cannot_mark_story_done_early {
+        var root = Fixtures.project()
+        Fixtures.mode(root, "premature-done")
+
+        var result = AgileSpecStory.run(inputs: Fixtures.approved(root))
+
+        are_equal(result.state, "failed")
+        is_true(result.error.contains("already complete"))
+    }
+
+    describe invalid_model_output_fails_without_publishing {
+        var root = Fixtures.project()
+        Fixtures.mode(root, "invalid-json")
+
+        var result = AgileSpecStory.run(
+            inputs: Fixtures.approved(root) with {
+                specification_mode: "Draft"
+            }
+        )
+
+        are_equal(result.state, "failed")
+        are_equal(result.step, "DraftSpecification")
+    }
+}

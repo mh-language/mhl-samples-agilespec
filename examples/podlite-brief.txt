@@ -1,0 +1,17 @@
+PodLite: um player de podcasts simples, para execução local.
+
+Backlog priorizado:
+1. Como ouvinte, quero cadastrar uma URL RSS e manter o podcast na minha lista.
+2. Como ouvinte, quero ver os episódios de um podcast para escolher o que ouvir.
+3. Como ouvinte, quero reproduzir, pausar e avançar dentro de um episódio.
+4. Como ouvinte, quero remover um podcast das minhas assinaturas.
+5. Como ouvinte, quero retomar um episódio na posição em que parei.
+6. Como ouvinte, quero buscar episódios pelo título.
+
+Direção técnica inicial: Python, Streamlit e SQLite. Separar interface,
+serviços e persistência. Preservar assinaturas entre reinicializações.
+Interface simples com navegação por podcasts e episódios.
+
+Definição de pronto inicial: testes de casos normais e de borda aprovados,
+revisão do código, validação manual por uma pessoa e consolidação aprovada.
+Detalhar apenas as decisões necessárias à próxima história.

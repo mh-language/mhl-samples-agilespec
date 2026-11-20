@@ -1,0 +1,50 @@
+import {SpecAuthor} from "../lib/agents.mh"
+import {SpecificationPrompt} from "../lib/prompts.mh"
+import {Specs} from "../lib/contracts.mh"
+
+// Fase 1: proposta, aprovação humana e publicação das specs da história.
+partial workflow AgileSpecStory stage specification {
+    step DraftSpecification timeout 12m {
+        var required = Specs.story_names(
+            ui_changes || !story_before.get("views.md", "").is_empty(),
+            database_changes || !story_before.get("tables.md", "").is_empty()
+        )
+        var data = json.stringify({
+            project_dir,
+            story_id,
+            project,
+            existing_story: story_before,
+            ui_changes,
+            database_changes,
+            feedback,
+            spec_round
+        })
+
+        var raw = SpecAuthor.run(repo: project_dir, prompt: SpecificationPrompt(data: data))
+
+        self.story = Specs.documents(raw, required, required)
+        Specs.acceptance(story["acceptance.md"])
+
+        Specs.same(project_folder, project)
+        Specs.same(story_folder, story_before)
+
+        Specs.artifact(review_folder, "specification-${spec_round}.json", {files: story})
+    }
+
+    step ApproveSpecification {
+        if (specs_approved_round != spec_round) {
+            pause(
+                "Revise ${review_folder}/specification-${spec_round}.json. " +
+                "Retome com specs_approved_round=${spec_round}."
+            )
+        }
+    }
+
+    step PublishStorySpecs {
+        Specs.same(project_folder, project)
+
+        Specs.apply(story_folder, story_before, story)
+
+        goto StartAttempt
+    }
+}

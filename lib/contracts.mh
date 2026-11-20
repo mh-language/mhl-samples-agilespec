@@ -1,0 +1,301 @@
+export enum ReviewAction { Pending, Approve, Revise, Reject }
+export enum SpecificationMode { Existing, Draft }
+
+export tool Specs {
+    project_names(): string[] -> [
+        "backlog.md",
+        "definition-of-done.md",
+        "architecture.md",
+        "database.md",
+        "ui.md"
+    ]
+
+    story_names(ui_changes: bool, database_changes: bool): string[] {
+        var names = ["acceptance.md", "design.md"]
+
+        if (ui_changes) {
+            names = names.append("views.md")
+        }
+
+        if (database_changes) {
+            names = names.append("tables.md")
+        }
+
+        return names
+    }
+
+    read(folder: string, names: string[], required: bool): any {
+        var files = {}
+
+        for (var name in names) {
+            var path = fs.join(folder, name)
+
+            if (fs.exists(path)) {
+                files[name] = fs.read(path)
+
+                if (files[name].trim().is_empty()) {
+                    fail("Empty specification: ${path}")
+                }
+            } else {
+                if (required) {
+                    fail("Missing specification: ${path}")
+                }
+
+                files[name] = ""
+            }
+        }
+
+        return files
+    }
+
+    story(folder: string, ui_changes: bool, database_changes: bool): any {
+        var files = self.read(folder, self.story_names(ui_changes, database_changes), true)
+
+        // Existing optional specifications are always included in context.
+        for (var name in ["views.md", "tables.md"]) {
+            if (fs.exists(fs.join(folder, name))) {
+                files[name] = fs.read(fs.join(folder, name))
+            }
+        }
+
+        self.acceptance(files["acceptance.md"])
+
+        return files
+    }
+
+    acceptance(text: string): bool {
+        if (!text.contains("Normal Case") || !text.contains("Edge Cases")) {
+            fail("acceptance.md must describe Normal Case and Edge Cases")
+        }
+
+        return true
+    }
+
+    documents(raw: string, allowed: string[], required: string[]): any {
+        var proposal = json.parse(raw)
+
+        if (!is_object(proposal) || !is_object(proposal?.files)) {
+            fail("Expected JSON object with files")
+        }
+
+        var files = proposal.files
+
+        for (var name in files.keys()) {
+            if (!allowed.contains(name)) {
+                fail("Unexpected document: ${name}")
+            }
+
+            if (!is_string(files[name])) {
+                fail("Document must be text: ${name}")
+            }
+
+            if (files[name].trim().is_empty()) {
+                fail("Empty document: ${name}")
+            }
+        }
+
+        for (var name in required) {
+            if (!files.keys().contains(name)) {
+                fail("Missing proposed document: ${name}")
+            }
+        }
+
+        return files
+    }
+
+    same(folder: string, snapshot: any): bool {
+        for (var name in snapshot.keys()) {
+            var path = fs.join(folder, name)
+            var current = if (fs.exists(path)) fs.read(path) else ""
+
+            if (current != snapshot[name]) {
+                fail("Specification changed outside this run: ${path}. Start a new session.")
+            }
+        }
+
+        return true
+    }
+
+    // Validate every target before writing any. A resumed partial apply accepts
+    // both the original and approved contents, then writes the same bytes again.
+    apply(folder: string, before: any, approved: any): bool {
+        for (var name in [...before.keys(), ...approved.keys()].unique()) {
+            var path = fs.join(folder, name)
+            var current = if (fs.exists(path)) fs.read(path) else ""
+
+            if (current != before.get(name, "") && current != approved.get(name, before.get(name, ""))) {
+                fail("Concurrent edit: ${path}. Start a new session and review again.")
+            }
+        }
+
+        dir.create(folder)
+
+        for (var name in approved.keys()) {
+            fs.write(fs.join(folder, name), approved[name])
+        }
+
+        return true
+    }
+
+    artifact(folder: string, name: string, value: any): bool {
+        dir.create(folder)
+
+        return fs.write(fs.join(folder, name), json.stringify(value))
+    }
+
+    story_id(value: string): bool {
+        if (!value.matches("[1-9][0-9]*")) {
+            fail("story_id must be a positive integer string")
+        }
+
+        return true
+    }
+
+    entry(backlog: string, story_id: string): string {
+        self.story_id(story_id)
+
+        var entries = backlog.split("\n")
+            .filter((line) -> line.trim().matches("${story_id}\\. \\[[ xX]\\] .+"))
+
+        if (entries.size() != 1) {
+            fail("Expected one backlog entry '${story_id}. [ ] ...'")
+        }
+
+        return entries[0]
+    }
+
+    pending(backlog: string, story_id: string): bool {
+        var entry = self.entry(backlog, story_id)
+
+        if (!entry.trim().starts_with("${story_id}. [ ] ")) {
+            fail("Story ${story_id} is already complete")
+        }
+
+        return true
+    }
+
+    finish(backlog: string, story_id: string): string {
+        var entry = self.entry(backlog, story_id)
+
+        if (!entry.trim().starts_with("${story_id}. [ ] ")) {
+            return backlog
+        }
+
+        var done = entry.replace("${story_id}. [ ] ", "${story_id}. [x] ")
+
+        return backlog.split("\n")
+            .map((line) -> if (line == entry) done else line)
+            .join("\n")
+    }
+
+    report(raw: string): any {
+        var report = json.parse(raw)
+
+        if (!is_object(report)) {
+            fail("Expected implementation report object")
+        }
+
+        if (report?.status != "ready" && report?.status != "blocked") {
+            fail("Invalid implementation status")
+        }
+
+        for (var field in ["summary", "manual_validation", "consolidation_context"]) {
+            if (!is_string(report.get(field))) {
+                fail("Missing report text: ${field}")
+            }
+        }
+
+        self.string_list(report?.limitations, "limitations")
+        self.string_list(report?.pending_dod, "pending_dod")
+
+        return report
+    }
+
+    string_list(value: any, label: string): bool {
+        if (!is_array(value)) {
+            fail("${label} must be a string array")
+        }
+
+        if (!value.all((item) -> is_string(item))) {
+            fail("${label} must contain strings")
+        }
+
+        return true
+    }
+
+    consolidation(raw: string, project: any, story: any, story_id: string): any {
+        var required = ["backlog.md", "architecture.md"]
+
+        if (story.keys().contains("views.md")) {
+            required = required.append("ui.md")
+        }
+
+        if (story.keys().contains("tables.md")) {
+            required = required.append("database.md")
+        }
+
+        var files = self.documents(raw, required, required)
+        var proposal = json.parse(raw)
+
+        self.string_list(proposal?.discrepancies, "discrepancies")
+        self.string_list(proposal?.pending_dod, "pending_dod")
+
+        if (!proposal.discrepancies.is_empty()) {
+            fail("Code/spec discrepancies: ${proposal.discrepancies.join("; ")}")
+        }
+
+        if (!proposal.pending_dod.is_empty()) {
+            fail("Unmet Definition of Done: ${proposal.pending_dod.join("; ")}")
+        }
+
+        self.pending(files["backlog.md"], story_id)
+
+        // Consolidation may refine summaries but never change completion status.
+        var before = self.statuses(project["backlog.md"])
+        var after = self.statuses(files["backlog.md"])
+
+        if (before != after) {
+            fail("Consolidation must preserve all backlog IDs and checkbox states")
+        }
+
+        return files
+    }
+
+    statuses(backlog: string): string[] -> backlog.split("\n")
+        .filter((line) -> line.trim().matches("[1-9][0-9]*\\. \\[[ xX]\\] .+"))
+        .map((line) -> line.trim().split("]")[0])
+}
+
+export tool Verification {
+    execute(repo: string, argv: string[]): any {
+        if (argv.is_empty()) {
+            fail("verify_command must contain the project's automated test command")
+        }
+
+        // cmd.exec has no cwd option. This fixed adapter passes all caller data
+        // as argv, with no shell interpolation, and preserves the test exit code.
+
+        var result = cmd.exec(
+            [
+                "python3",
+                "-c",
+                "import json, subprocess, sys; " +
+                "r = subprocess.run(json.loads(sys.argv[2]), cwd=sys.argv[1], " +
+                "text=True, capture_output=True); " +
+                "print(json.dumps({'stdout': r.stdout, 'stderr': r.stderr, " +
+                "'exit_code': r.returncode}))",
+                repo,
+                json.stringify(argv)
+            ],
+            timeout: 10m
+        )
+
+        if (result.exit_code != 0) {
+            fail("Could not run verification: ${result.stderr}")
+        }
+
+        var report = json.parse(result.stdout)
+
+        return report with { passed: report.exit_code == 0, command: argv }
+    }
+}

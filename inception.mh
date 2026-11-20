@@ -1,0 +1,66 @@
+import {SpecAuthor} from "lib/agents.mh"
+import {InceptionPrompt} from "lib/prompts.mh"
+import {Specs} from "lib/contracts.mh"
+
+export workflow AgileSpecInception {
+    description: "Prepara as cinco especificações globais leves e aguarda aprovação humana antes de publicá-las."
+
+    input project_dir: string
+    input brief: string
+    input approved: bool = false
+
+    var project_folder = ""
+    var review_folder = ""
+
+    var original = {}
+    var proposed = {}
+
+    output: {
+        project_dir,
+        project_specs: project_folder,
+        review_artifacts: review_folder
+    }
+
+    step ReadContext {
+        if (!dir.exists(project_dir)) {
+            fail("project_dir must be an existing directory")
+        }
+
+        if (brief.trim().is_empty()) {
+            fail("A product brief and prioritized story backlog are required")
+        }
+
+        self.project_folder = fs.join(project_dir, "AgileSpec", "project")
+        self.review_folder = fs.join(project_dir, ".agilespec-mhl", "inception")
+
+        self.original = Specs.read(project_folder, Specs.project_names(), false)
+    }
+
+    step DraftInception timeout 12m {
+        var data = json.stringify({project_dir, brief, existing_project: original})
+
+        var raw = SpecAuthor.run(repo: project_dir, prompt: InceptionPrompt(data: data))
+
+        self.proposed = Specs.documents(raw, Specs.project_names(), Specs.project_names())
+        Specs.same(project_folder, original)
+
+        Specs.artifact(review_folder, "project-proposal.json", {before: original, files: proposed})
+    }
+
+    step ApproveInception {
+        if (!approved) {
+            pause(
+                "Revise ${review_folder}/project-proposal.json. " +
+                "Retome com approved=true para aprovar a iniciação."
+            )
+        }
+    }
+
+    step PublishProjectSpecs {
+        Specs.apply(project_folder, original, proposed)
+    }
+
+    step Done {
+        complete()
+    }
+}

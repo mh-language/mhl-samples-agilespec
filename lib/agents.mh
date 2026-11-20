@@ -1,0 +1,21 @@
+// Run the CLI directly. Override the executable for another compatible CLI.
+export agent SpecAuthor {
+    input repo: string
+
+    command: env("AGILESPEC_SPEC_CMD", "claude")
+    args: ["-p", "${prompt}"]
+    cwd: repo
+    timeout: 10m
+    cache: { ttl: 10m, storage: "disk" }
+}
+
+// File-editing calls deliberately have no automatic retry or cache: a revision
+// must examine the current checkout, even if its instruction was seen before.
+export agent StoryImplementer {
+    input repo: string
+
+    command: env("AGILESPEC_CODE_CMD", "claude")
+    args: ["-p", "${prompt}"]
+    cwd: repo
+    timeout: 30m
+}

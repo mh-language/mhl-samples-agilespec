@@ -1,0 +1,63 @@
+import {Specs} from "../lib/contracts.mh"
+
+export tool Fixtures {
+    project(): string {
+        // Refuse to call production agents, even when mhl test is run directly.
+        if (env("AGILESPEC_TEST_MODE") != "offline") {
+            fail("Run ./workflow-mhl/check.sh to configure offline test agents")
+        }
+
+        if (
+            !env("AGILESPEC_SPEC_CMD").ends_with("/tests/mock-agent.py") ||
+            !env("AGILESPEC_CODE_CMD").ends_with("/tests/mock-agent.py")
+        ) {
+            fail("Tests require the offline mock-agent.py executable")
+        }
+
+        var root = fs.join(os.cwd(), ".mhl", "test-tmp", uuid.v4())
+        var project = fs.join(root, "AgileSpec", "project")
+        var story = fs.join(root, "AgileSpec", "stories", "story1")
+
+        dir.create(project)
+        dir.create(story)
+
+        fs.write(
+            fs.join(project, "backlog.md"),
+            "# Backlog\n1. [ ] Feature one.\n2. [ ] Feature two.\n11. [ ] Feature eleven.\n"
+        )
+        fs.write(
+            fs.join(project, "definition-of-done.md"),
+            "# Done\nTests, manual validation and approved consolidation.\n"
+        )
+        fs.write(fs.join(project, "architecture.md"), "# Architecture\nIndependent modules.\n")
+        fs.write(fs.join(project, "database.md"), "# Database\nNot applicable.\n")
+        fs.write(fs.join(project, "ui.md"), "# UI\nNot applicable.\n")
+
+        fs.write(
+            fs.join(story, "acceptance.md"),
+            "# Story\n## Normal Case\nDeliver feature.\n## Edge Cases\nReject invalid data.\n"
+        )
+        fs.write(fs.join(story, "design.md"), "# Design\nImplement src/feature.txt.\n")
+
+        return root
+    }
+
+    command(): string[] -> [
+        "python3",
+        "-c",
+        "from pathlib import Path; assert Path('src/feature.txt').read_text().strip() == 'implemented'"
+    ]
+
+    approved(root: string): any -> {
+        project_dir: root,
+        story_id: "1",
+        verify_command: self.command(),
+        specs_approved_round: 1,
+        review_action: "Approve",
+        review_round: 1,
+        consolidation_approved_round: 1,
+        dod_confirmed_round: 1
+    }
+
+    mode(root: string, mode: string): bool -> fs.write(fs.join(root, ".mock-mode"), mode)
+}

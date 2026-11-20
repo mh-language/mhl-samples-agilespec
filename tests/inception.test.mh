@@ -1,0 +1,55 @@
+import {AgileSpecInception} from "../inception.mh"
+import {Fixtures} from "fixtures.mh"
+
+test inception_lifecycle {
+    describe initial_proposal_waits_without_overwriting_project_specs {
+        var root = Fixtures.project()
+        var path = fs.join(root, "AgileSpec", "project", "architecture.md")
+        var original = fs.read(path)
+
+        var result = AgileSpecInception.run(
+            inputs: {
+                project_dir: root,
+                brief: "A feature and a prioritized backlog"
+            }
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(result.executed, ["ReadContext", "DraftInception", "ApproveInception"])
+        are_equal(fs.read(path), original)
+    }
+
+    describe approved_inception_publishes_all_five_documents {
+        var root = Fixtures.project()
+
+        var result = AgileSpecInception.run(
+            inputs: {
+                project_dir: root,
+                brief: "A feature and a prioritized backlog",
+                approved: true
+            }
+        )
+
+        are_equal(result.state, "completed")
+        are_equal(
+            result.executed,
+            [
+                "ReadContext",
+                "DraftInception",
+                "ApproveInception",
+                "PublishProjectSpecs",
+                "Done"
+            ]
+        )
+        is_true(fs.read(fs.join(root, "AgileSpec", "project", "architecture.md")).contains("Keep modules"))
+    }
+
+    describe empty_brief_fails_before_agent_call {
+        var root = Fixtures.project()
+
+        var result = AgileSpecInception.run(inputs: {project_dir: root, brief: " "})
+
+        are_equal(result.state, "failed")
+        are_equal(result.executed, ["ReadContext"])
+    }
+}

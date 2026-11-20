@@ -1,0 +1,4 @@
+export prompt InceptionPrompt(data: string) from "../prompts/inception.md"
+export prompt SpecificationPrompt(data: string) from "../prompts/specification.md"
+export prompt ImplementationPrompt(data: string) from "../prompts/implementation.md"
+export prompt ConsolidationPrompt(data: string) from "../prompts/consolidation.md"
