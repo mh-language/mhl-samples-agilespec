@@ -4,7 +4,7 @@
 
 # AgileSpec em MHL
 
-Implementação executável do ciclo de entrega do [AgileSpec](../AgileSpec/README.md)
+Implementação executável do ciclo de entrega do [AgileSpec](https://github.com/mtov/AgileSpec)
 em **[Meta-Harness Language (MHL)](https://github.com/mh-language/mhl-core-runtime)**,
 com arquivos `.mh`. Preserva as especificações em Markdown junto ao código e expressa
 a orquestração, decisões humanas, verificações e ciclos de correção em MHL.
@@ -65,7 +65,8 @@ ferramentas MCP, junto às ferramentas de controle de execução (`mhl_run_start
 ## Estrutura
 
 ```text
-workflow-mhl/
+mhl-samples-agilespec/
+  agilespec                    # CLI que conduz o ciclo passo a passo
   inception.mh                 # entrada de iniciação
   story.mh                     # entrada de entrega de uma história (inputs, estado, LoadContext,
                                # PrepareRevision e Rejected, que valem para a história inteira)
@@ -79,7 +80,7 @@ workflow-mhl/
     prompts.mh                 # templates tipados com prompts externos
   prompts/                     # instruções por atividade
   examples/podlite-brief.txt    # exemplo de contexto inicial
-  tests/                       # testes MHL e integração real de checkpoint/resume
+  tests/                       # testes MHL e integração real de checkpoint/resume e do CLI
   assets/                      # capturas de tela do MHL Studio
   check.sh                     # verificação local, sem LLM ou rede
 ```
@@ -185,7 +186,7 @@ Na primeira execução:
 - **Linux:** `chmod +x mhl.studio_*.AppImage` e execute o AppImage, ou instale o
   pacote `.deb`/`.rpm` pelo gerenciador de pacotes.
 
-Abra a pasta `workflow-mhl/` no Studio para visualizar e editar `inception.mh` e
+Abra a pasta deste repositório no Studio para visualizar e editar `inception.mh` e
 `story.mh`.
 
 ## Pré-requisitos e agentes
@@ -212,13 +213,55 @@ Cada chamada tem timeout. A implementação não possui retry automático ou cac
 uma retomada deve examinar o checkout atual. Propostas de especificação têm cache
 de dez minutos, com o diretório do projeto incluído no contexto.
 
-## Executar
+## Usar com o CLI `agilespec`
 
-Execute os exemplos abaixo a partir de `workflow-mhl/`. Use um diretório absoluto
-para o projeto e uma sessão própria para cada iniciação/história. Mantenha o mesmo
-diretório de execução, arquivo de entrada e nome de sessão nas retomadas.
-Não execute sessões concorrentes para a mesma história ou para consolidações no
-mesmo projeto.
+O `agilespec`, na raiz deste repositório, conduz o ciclo passo a passo. Ele chama
+`mhl run` dentro da pasta do projeto, guarda as sessões do projeto, mostra o que
+revisar em cada pausa (proposta, testes, relatório do agente, evidências) e
+pergunta a decisão, retomando até a próxima pausa. Requer Python 3 e o `mhl` no
+`PATH`.
+
+```sh
+export AGILESPEC_PROJECT=/caminho/absoluto/meu-projeto
+alias agilespec=/caminho/para/mhl-samples-agilespec/agilespec
+
+agilespec inception --brief examples/podlite-brief.txt
+agilespec story 1 --draft --verify "python3 -m pytest"
+agilespec status
+agilespec next
+```
+
+Num terminal, `inception` e `story` já perguntam cada decisão. Em `q` (ou
+Ctrl-D), a sessão fica pausada; `agilespec next` a retoma. O projeto é
+`--project`, senão `$AGILESPEC_PROJECT`, senão a pasta atual.
+
+| Comando | O que faz |
+| --- | --- |
+| `inception --brief ARQUIVO` | Propõe as specs globais a partir do brief (arquivo, texto ou `-`) |
+| `story ID [--draft] [--ui] [--db] [--verify CMD]` | Especifica, implementa e consolida a história `ID`; o comando de testes fica guardado para as próximas |
+| `next` | Mostra a pausa pendente, pergunta a decisão e continua; numa falha, oferece tentar o passo de novo |
+| `status` / `show` | Lista as sessões / mostra de novo a última pausa ou o desfecho |
+| `approve [--dod]` · `revise "feedback" [--specs]` · `reject` | Decidem sem perguntas, para scripts; aprovar a consolidação exige `--dod` |
+| `decide JSON` | Responde a pausa com a decisão JSON do tipo esperado |
+| `redo FASE` | Refaz `Specification`, `Implementation` ou `Consolidation` |
+
+Com mais de uma sessão em aberto, escolha uma com `-s <sessão>`. Uma história
+recomeçada depois de concluída ou rejeitada ganha uma sessão nova (`story-2-2`).
+O estado fica no projeto: `.mhl/` e `.mhl-cache/` (runtime) e
+`.agilespec-mhl/cli.json` (CLI); inclua `.mhl/` e `.mhl-cache/` no `.gitignore`
+do projeto. A seção seguinte, "Executar apenas com MHL", mostra o mesmo ciclo
+com `mhl run` diretamente, sem o CLI.
+
+## Executar apenas com MHL
+
+Esta seção usa só o `mhl`, sem o CLI `agilespec`: cada passo é um `mhl run`, e
+cada decisão é passada com `--decision`.
+
+Execute os exemplos abaixo a partir da raiz deste repositório. Use um diretório
+absoluto para o projeto e uma sessão própria para cada iniciação/história.
+Mantenha o mesmo diretório de execução, arquivo de entrada e nome de sessão nas
+retomadas. Não execute sessões concorrentes para a mesma história ou para
+consolidações no mesmo projeto.
 
 ### 1. Iniciação
 
@@ -365,15 +408,15 @@ as especificações globais consolidadas.
 
 ## Verificar a implementação
 
-Da raiz deste workspace:
+Da raiz deste repositório:
 
 ```sh
-./workflow-mhl/check.sh
+./check.sh
 ```
 
 Esse comando faz lint, executa os testes MHL com um agente local simulado,
 valida os dois contratos de entrada com `--dry-run` e exercita checkpoints reais
-com `--resume` em um projeto temporário. Os dados de teste e caches são criados
+com `--resume` e com o CLI `agilespec` em projetos temporários. Os dados de teste e caches são criados
 em diretórios temporários e removidos ao terminar. Não usa modelos, rede ou credenciais.
 Os testes MHL recusam agentes de produção se chamados sem a configuração offline.
 
@@ -384,13 +427,13 @@ As execuções reais com uma CLI de modelo dependem da configuração local dess
 
 ## Fontes e licença
 
-Derivado do [README](../AgileSpec/README.md), [FAQ](../AgileSpec/faq.md) e prompts de
-[implementação](../AgileSpec/prompts/implementation.md) e
-[consolidação](../AgileSpec/prompts/consolidation.md) do AgileSpec.
-Sintaxe e práticas baseadas nas skills locais de
-[linguagem](../mhl-skills/mhl-language/SKILL.md),
-[workflows](../mhl-skills/mhl-workflows/SKILL.md),
-[agentes](../mhl-skills/mhl-agents/SKILL.md),
-[ferramentas](../mhl-skills/mhl-tools/SKILL.md) e
-[testes](../mhl-skills/mhl-testing/SKILL.md).
+Derivado do [README](https://github.com/mtov/AgileSpec), [FAQ](https://github.com/mtov/AgileSpec/blob/main/faq.md) e prompts de
+[implementação](https://github.com/mtov/AgileSpec/blob/main/prompts/implementation.md) e
+[consolidação](https://github.com/mtov/AgileSpec/blob/main/prompts/consolidation.md) do AgileSpec.
+Sintaxe e práticas baseadas nas skills do MHL de
+[linguagem](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-language/SKILL.md),
+[workflows](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-workflows/SKILL.md),
+[agentes](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-agents/SKILL.md),
+[ferramentas](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-tools/SKILL.md) e
+[testes](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-testing/SKILL.md).
 O aviso MIT do AgileSpec está preservado em [LICENSE](LICENSE).

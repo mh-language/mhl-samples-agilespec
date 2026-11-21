@@ -4,7 +4,7 @@
 
 # AgileSpec in MHL
 
-Executable implementation of the [AgileSpec](../AgileSpec/README.md) delivery cycle
+Executable implementation of the [AgileSpec](https://github.com/mtov/AgileSpec) delivery cycle
 in **[Meta-Harness Language (MHL)](https://github.com/mh-language/mhl-core-runtime)**,
 using `.mh` files. It keeps the Markdown specifications next to the code and
 expresses orchestration, human decisions, checks and correction cycles in MHL.
@@ -65,7 +65,8 @@ MCP tools, alongside the run control tools (`mhl_run_start`, `mhl_run_resume`,
 ## Structure
 
 ```text
-workflow-mhl/
+mhl-samples-agilespec/
+  agilespec                    # CLI that walks through the cycle step by step
   inception.mh                 # inception entry point
   story.mh                     # single-story delivery entry point (inputs, state, LoadContext,
                                # plus PrepareRevision and Rejected, which serve the whole story)
@@ -79,7 +80,7 @@ workflow-mhl/
     prompts.mh                 # typed templates with external prompts
   prompts/                     # per-activity instructions
   examples/podlite-brief.txt    # sample initial context
-  tests/                       # MHL tests and real checkpoint/resume integration
+  tests/                       # MHL tests and real checkpoint/resume and CLI integration
   assets/                      # MHL Studio screenshots
   check.sh                     # local verification, no LLM or network
 ```
@@ -184,7 +185,7 @@ On first launch:
 - **Linux:** `chmod +x mhl.studio_*.AppImage` and run the AppImage, or install the
   `.deb`/`.rpm` package with your package manager.
 
-Open the `workflow-mhl/` folder in Studio to view and edit `inception.mh` and
+Open this repository's folder in Studio to view and edit `inception.mh` and
 `story.mh`.
 
 ## Prerequisites and agents
@@ -212,13 +213,54 @@ Every call has a timeout. Implementation has no automatic retry or cache;
 a resume must examine the current checkout. Specification proposals are cached
 for ten minutes, with the project directory included in the context.
 
-## Running
+## Using the `agilespec` CLI
 
-Run the examples below from `workflow-mhl/`. Use an absolute path for the project
-and a dedicated session for each inception/story. Keep the same working directory,
-entry file and session name when resuming.
-Do not run concurrent sessions for the same story or for consolidations in the
-same project.
+`agilespec`, at the root of this repository, walks through the cycle step by
+step. It calls `mhl run` inside the project folder, keeps the project's sessions,
+shows what to review at each pause (proposal, tests, agent report, evidence) and
+asks for the decision, resuming until the next pause. It needs Python 3 and `mhl`
+on the `PATH`.
+
+```sh
+export AGILESPEC_PROJECT=/absolute/path/my-project
+alias agilespec=/path/to/mhl-samples-agilespec/agilespec
+
+agilespec inception --brief examples/podlite-brief.txt
+agilespec story 1 --draft --verify "python3 -m pytest"
+agilespec status
+agilespec next
+```
+
+In a terminal, `inception` and `story` ask each decision right away. At `q` (or
+Ctrl-D), the session stays paused; `agilespec next` resumes it. The project is
+`--project`, else `$AGILESPEC_PROJECT`, else the current folder.
+
+| Command | What it does |
+| --- | --- |
+| `inception --brief FILE` | Proposes the global specs from the brief (a file, the text, or `-`) |
+| `story ID [--draft] [--ui] [--db] [--verify CMD]` | Specifies, implements and consolidates story `ID`; the test command is kept for the next ones |
+| `next` | Shows the pending pause, asks for the decision and goes on; after a failure, offers to run the step again |
+| `status` / `show` | Lists the sessions / shows the last pause or outcome again |
+| `approve [--dod]` · `revise "feedback" [--specs]` · `reject` | Decide without questions, for scripts; approving the consolidation needs `--dod` |
+| `decide JSON` | Answers the pause with a JSON decision of the expected type |
+| `redo STAGE` | Redoes `Specification`, `Implementation` or `Consolidation` |
+
+With more than one session open, pick one with `-s <session>`. A story started
+again after it was completed or rejected gets a new session (`story-2-2`).
+State lives in the project: `.mhl/` and `.mhl-cache/` (runtime) and
+`.agilespec-mhl/cli.json` (CLI); add `.mhl/` and `.mhl-cache/` to the project's
+`.gitignore`. The next section, "Running with MHL only", shows the same cycle
+with `mhl run` directly, without the CLI.
+
+## Running with MHL only
+
+This section uses `mhl` alone, without the `agilespec` CLI: each step is an
+`mhl run`, and each decision is passed with `--decision`.
+
+Run the examples below from the root of this repository. Use an absolute path for
+the project and a dedicated session for each inception/story. Keep the same
+working directory, entry file and session name when resuming. Do not run
+concurrent sessions for the same story or for consolidations in the same project.
 
 ### 1. Inception
 
@@ -364,15 +406,15 @@ consolidated global specifications.
 
 ## Verifying the implementation
 
-From the root of this workspace:
+From the root of this repository:
 
 ```sh
-./workflow-mhl/check.sh
+./check.sh
 ```
 
 This command lints, runs the MHL tests with a simulated local agent, validates
 both entry contracts with `--dry-run` and exercises real checkpoints with
-`--resume` in a temporary project. Test data and caches are created in temporary
+`--resume` and with the `agilespec` CLI in temporary projects. Test data and caches are created in temporary
 directories and removed at the end. It uses no models, network or credentials.
 The MHL tests refuse production agents if called without the offline configuration.
 
@@ -383,13 +425,13 @@ Real runs with a model CLI depend on that CLI's local configuration.
 
 ## Sources and license
 
-Derived from the AgileSpec [README](../AgileSpec/README.md), [FAQ](../AgileSpec/faq.md) and
-[implementation](../AgileSpec/prompts/implementation.md) and
-[consolidation](../AgileSpec/prompts/consolidation.md) prompts.
-Syntax and practices based on the local skills for
-[language](../mhl-skills/mhl-language/SKILL.md),
-[workflows](../mhl-skills/mhl-workflows/SKILL.md),
-[agents](../mhl-skills/mhl-agents/SKILL.md),
-[tools](../mhl-skills/mhl-tools/SKILL.md) and
-[testing](../mhl-skills/mhl-testing/SKILL.md).
+Derived from the AgileSpec [README](https://github.com/mtov/AgileSpec), [FAQ](https://github.com/mtov/AgileSpec/blob/main/faq.md) and
+[implementation](https://github.com/mtov/AgileSpec/blob/main/prompts/implementation.md) and
+[consolidation](https://github.com/mtov/AgileSpec/blob/main/prompts/consolidation.md) prompts.
+Syntax and practices based on the MHL skills for
+[language](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-language/SKILL.md),
+[workflows](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-workflows/SKILL.md),
+[agents](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-agents/SKILL.md),
+[tools](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-tools/SKILL.md) and
+[testing](https://github.com/mh-language/mhl-core-runtime/blob/main/skills/mhl-testing/SKILL.md).
 The AgileSpec MIT notice is preserved in [LICENSE](LICENSE).

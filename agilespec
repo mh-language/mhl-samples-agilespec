@@ -1,0 +1,775 @@
+#!/usr/bin/env python3
+"""agilespec: conduz o ciclo AgileSpec em MHL, passo a passo.
+
+Chama `mhl run` por você, dentro da pasta do projeto: inicia a iniciação e as
+histórias, guarda as sessões do projeto, mostra o que revisar em cada pausa,
+pergunta a decisão e retoma até a próxima pausa.
+
+    agilespec inception --brief examples/podlite-brief.txt
+    agilespec story 1 --draft --verify "python3 -m pytest"
+    agilespec next            # revisa e decide a pausa pendente, de forma guiada
+    agilespec status
+
+O projeto é `--project`, senão $AGILESPEC_PROJECT, senão a pasta atual. O estado
+das sessões fica nele: `.mhl/` (runtime) e `.agilespec-mhl/cli.json` (este CLI).
+Só usa a biblioteca padrão do Python.
+"""
+
+import argparse
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+
+WORKFLOW_DIR = Path(__file__).resolve().parent
+WORKFLOWS = {"inception": "inception.mh", "story": "story.mh"}
+STAGES = ("Specification", "Implementation", "Consolidation")
+# Result kinds of a command mhl refused before running anything.
+REFUSED = ("invalid_decision", "invalid_inputs")
+
+# Statuses a session can be in. "paused" and "failed" can go on; the others ended.
+OPEN = ("paused", "failed")
+LABELS = {
+    "paused": "aguardando decisão",
+    "failed": "falhou",
+    "done": "concluída",
+    "rejected": "rejeitada",
+    "discarded": "descartada",
+    "stopped": "encerrada",
+}
+STEP_TITLES = {
+    "ApproveInception": "Aprovar a iniciação",
+    "ApproveSpecification": "Aprovar a especificação",
+    "ReviewImplementation": "Revisar a implementação",
+    "ApproveConsolidation": "Aprovar a consolidação e a Definition of Done",
+}
+
+
+class CliError(Exception):
+    """A problem to report to the user, without a traceback."""
+
+
+# ── Output ──────────────────────────────────────────────────────────────
+
+COLOR = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
+
+
+def paint(code, text):
+    return f"\033[{code}m{text}\033[0m" if COLOR else text
+
+
+def bold(text):
+    return paint("1", text)
+
+
+def dim(text):
+    return paint("2", text)
+
+
+def red(text):
+    return paint("31", text)
+
+
+def green(text):
+    return paint("32", text)
+
+
+def yellow(text):
+    return paint("33", text)
+
+
+def wrap(text, indent="  "):
+    width = min(shutil.get_terminal_size((100, 20)).columns, 100)
+    return textwrap.fill(text, width=width, initial_indent=indent, subsequent_indent=indent, break_on_hyphens=False, break_long_words=False)
+
+
+def duration(ms):
+    s = ms // 1000
+    if s < 1:
+        return f"{ms}ms"
+    if s < 60:
+        return f"{s}s"
+    return f"{s // 60}m{s % 60:02d}s"
+
+
+# ── Project state ───────────────────────────────────────────────────────
+
+
+class Project:
+    """A project folder and the sessions this CLI started in it."""
+
+    def __init__(self, root):
+        self.root = Path(root).expanduser().resolve()
+        if not self.root.is_dir():
+            raise CliError(f"A pasta do projeto não existe: {self.root}")
+        self.dir = self.root / ".agilespec-mhl"
+        self.file = self.dir / "cli.json"
+        self.state = json.loads(self.file.read_text()) if self.file.exists() else {"sessions": {}}
+
+    def save(self):
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.file.write_text(json.dumps(self.state, ensure_ascii=False, indent=2) + "\n")
+
+    @property
+    def sessions(self):
+        return self.state["sessions"]
+
+    def last_result(self, name):
+        path = self.dir / "cli" / f"{name}.json"
+        return json.loads(path.read_text()) if path.exists() else None
+
+    def keep_result(self, name, result):
+        path = self.dir / "cli" / f"{name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
+
+    def new_session_name(self, base):
+        if base not in self.sessions:
+            return base
+        n = 2
+        while f"{base}-{n}" in self.sessions:
+            n += 1
+        return f"{base}-{n}"
+
+    def pick(self, name=None):
+        """The session to act on: the one named, else the only open one."""
+        if name:
+            if name not in self.sessions:
+                raise CliError(f"Sessão desconhecida: {name}. Veja `agilespec status`.")
+            return name
+        open_ones = [n for n, s in self.sessions.items() if s["status"] in OPEN]
+        if not open_ones:
+            raise CliError("Nenhuma sessão aguardando. Comece com `agilespec inception` ou `agilespec story <id>`.")
+        if len(open_ones) > 1:
+            listed = ", ".join(open_ones)
+            raise CliError(f"Há mais de uma sessão em aberto ({listed}). Escolha uma com -s <sessão>.")
+        return open_ones[0]
+
+
+# ── Running mhl ─────────────────────────────────────────────────────────
+
+
+def run_mhl(project, name, *, inputs=None, resume=False, decision=None, from_stage=None):
+    """Runs one `mhl run` of the session, printing the steps as they go.
+
+    Returns the run's result object, or None when mhl refused the command
+    before running anything (a decision of the wrong type, say): the session
+    is then as it was.
+    """
+    session = project.sessions[name]
+    argv = ["mhl", "run", str(WORKFLOW_DIR / session["workflow"]), "--session", name, "--format", "jsonl"]
+    if resume:
+        argv.append("--resume")
+    if decision is not None:
+        argv += ["--decision", json.dumps(decision, ensure_ascii=False)]
+    if from_stage:
+        argv += ["--from", from_stage]
+    for key, value in (inputs or {}).items():
+        value = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+        argv += ["--input", f"{key}={value}"]
+
+    if shutil.which("mhl") is None:
+        raise CliError("O `mhl` não está no PATH. Veja a seção de instalação no README.")
+
+    proc = subprocess.Popen(argv, cwd=project.root, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    errors = []
+    drain = threading.Thread(target=lambda: errors.extend(proc.stderr), daemon=True)
+    drain.start()
+    result = None
+    stage = None
+    for line in proc.stdout:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        kind = event.get("type")
+        if kind == "run_start" and event.get("steps"):
+            session.setdefault("first_step", event["steps"][0])
+        elif kind == "step_start":
+            if event.get("stage") and event["stage"] != stage:
+                stage = event["stage"]
+                print(bold(f"  {stage}"), flush=True)
+            # On a terminal, the running step's line is replaced by its outcome.
+            print(dim(f"  … {event['step']}"), end="\r" if COLOR else "\n", flush=True)
+        elif kind == "step_end":
+            status = event.get("status")
+            mark = {"ok": green("✓"), "goto": green("✓"), "complete": green("✓"), "pause": yellow("⏸"), "break": yellow("■")}.get(status, red("✗"))
+            then = f" → {event['target']}" if status == "goto" and event.get("target") else ""
+            clear = "\033[K" if COLOR else ""
+            print(f"  {mark} {event['step']}{dim(then)} {dim(duration(event.get('ms', 0)))}{clear}", flush=True)
+        elif kind == "result":
+            result = event
+    proc.wait()
+    drain.join()
+
+    # Refused before any step ran (no result, or a decision or inputs of the
+    # wrong type): the session is as it was.
+    if result is None or result.get("kind") in REFUSED:
+        message = (result or {}).get("error") or "".join(errors).strip() or f"mhl terminou com código {proc.returncode}"
+        print(red(f"  ✗ {message.removeprefix('mhl: ')}"))
+        return None
+
+    result.pop("type", None)
+    result.pop("ts", None)
+    record(project, name, result)
+    return result
+
+
+def record(project, name, result):
+    """Saves what a run ended in: paused, failed, or one of the endings."""
+    session = project.sessions[name]
+    session["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    session.pop("awaiting", None)
+    session.pop("error", None)
+    if not result.get("ok", False):
+        session["status"] = "failed"
+        session["error"] = result.get("error", "")
+        session["failed_step"] = result.get("step", "")
+    elif result.get("paused"):
+        session["status"] = "paused"
+        session["awaiting"] = result["awaiting"]["step"]
+    else:
+        status = (result.get("vars") or {}).get("status")
+        if status in ("done", "rejected"):
+            session["status"] = status
+        elif result.get("broke"):
+            session["status"] = "discarded" if session["kind"] == "inception" else "stopped"
+        else:
+            session["status"] = "done"
+        session["reason"] = result.get("break_reason", "")
+    project.keep_result(name, result)
+    project.save()
+
+
+# ── Showing a pause ─────────────────────────────────────────────────────
+
+
+def show_result(project, name, result):
+    """Says how the run ended and, at a pause, what to review."""
+    session = project.sessions[name]
+    status = session["status"]
+    print()
+    if status == "failed":
+        print(red(bold(f"✗ {name}: falhou em {session.get('failed_step') or 'um passo'}")))
+        print(wrap(result.get("error", "")))
+        if result.get("hint"):
+            print(wrap(dim(result["hint"])))
+        print(wrap(f"Corrija a causa e rode `agilespec next -s {name}` para tentar o passo de novo."))
+        return
+    if status != "paused":
+        title = {"done": green("✓ concluída"), "rejected": yellow("rejeitada"), "discarded": yellow("descartada")}.get(status, status)
+        print(bold(f"{name}: {title}"))
+        if result.get("break_reason"):
+            print(wrap(result["break_reason"]))
+        vars_ = result.get("vars") or {}
+        if vars_.get("review_artifacts"):
+            print(wrap(f"Evidências: {relative(project, vars_['review_artifacts'])}"))
+        if session["kind"] == "story" and status == "done":
+            print(wrap("A história foi marcada como concluída no backlog. Comece a próxima com `agilespec story <id>`."))
+        if session["kind"] == "inception" and status == "done":
+            print(wrap("Specs globais publicadas. Comece uma história com `agilespec story <id>`."))
+        return
+
+    step = result["awaiting"]["step"]
+    vars_ = result.get("vars") or {}
+    print(yellow(bold(f"⏸ {name} · {STEP_TITLES.get(step, step)}")))
+    if step in STEP_TITLES:
+        # A known gate is summed up below; only the workflow's notice (a
+        # refused decision, say) is worth repeating from its message.
+        if vars_.get("review_notice"):
+            print(wrap(yellow(vars_["review_notice"].strip())))
+    else:
+        print(wrap(relative(project, result.get("pause_reason", ""))))
+    for line in review_notes(project, step, vars_):
+        print(line)
+
+
+def relative(project, text):
+    """`text` with the project's absolute path made relative to it."""
+    return text.replace(str(project.root) + os.sep, "")
+
+
+def review_notes(project, step, v):
+    """What is worth knowing at each gate, from the run's state."""
+    out = []
+    review = relative(project, v.get("review_folder", ""))
+
+    def item(label, text):
+        out.append(wrap(f"{bold(label)} {relative(project, text)}"))
+
+    if step == "ApproveInception":
+        item("Proposta:", f"{review}/project-proposal.json")
+        docs = sorted((v.get("proposed") or {}).keys())
+        if docs:
+            item("Documentos:", ", ".join(docs) + f" → {v.get('project_folder', '')}")
+    elif step == "ApproveSpecification":
+        rnd = v.get("spec_round", 1)
+        item(f"Proposta (rodada {rnd}):", f"{review}/specification-{rnd}.json")
+        docs = sorted((v.get("story") or {}).keys())
+        if docs:
+            item("Documentos:", ", ".join(docs) + f" → {v.get('story_folder', '')}")
+        if v.get("feedback"):
+            item("Feedback anterior:", v["feedback"])
+    elif step == "ReviewImplementation":
+        impl = v.get("implementation") or {}
+        ver = v.get("verification") or {}
+        attempt = v.get("attempt", 1)
+        item("Tentativa:", f"{attempt} de {v.get('max_attempts', 3)}")
+        if impl.get("status"):
+            state = green(impl["status"]) if impl["status"] == "ready" else red(impl["status"])
+            item("Agente:", f"{state} — {impl.get('summary', '')}")
+        if ver:
+            cmd = shlex.join(ver.get("command") or [])
+            ok = green("passaram") if ver.get("passed") else red(f"falharam (código {ver.get('exit_code')})")
+            item("Testes:", f"{ok} · {cmd}")
+            if not ver.get("passed"):
+                tail = (ver.get("stderr") or ver.get("stdout") or "").strip().splitlines()[-8:]
+                out.extend(dim("    " + line) for line in tail)
+        for key, label in (("pending_dod", "DoD pendente:"), ("limitations", "Limitações:")):
+            if impl.get(key):
+                item(label, "; ".join(impl[key]))
+        if impl.get("manual_validation"):
+            item("Validação manual:", impl["manual_validation"])
+        item("Evidências:", f"{review}/implementation-{attempt}.json, verification-{attempt}.json")
+        if (project.root / ".git").exists():
+            item("Diff:", "git diff")
+    elif step == "ApproveConsolidation":
+        item("Proposta:", f"{review}/consolidation.json")
+        docs = sorted((v.get("consolidated") or {}).keys())
+        if docs:
+            item("Documentos:", ", ".join(docs) + f" → {v.get('project_folder', '')}")
+        problems = v.get("consolidation_problems") or []
+        if problems:
+            item(red("Problemas:"), "; ".join(problems))
+        item("Definition of Done:", f"{v.get('project_folder', '')}/definition-of-done.md")
+    return out
+
+
+# ── Asking for a decision ───────────────────────────────────────────────
+
+
+class Quit(Exception):
+    """The user left the session paused."""
+
+
+def ask(prompt):
+    try:
+        answer = input(prompt)
+    except EOFError:
+        raise Quit()
+    if answer.strip().lower() in ("q", "sair"):
+        raise Quit()
+    return answer.strip()
+
+
+def ask_yes(prompt, default=None):
+    hint = {True: "[S/n]", False: "[s/N]", None: "[s/n]"}[default]
+    while True:
+        answer = ask(f"{prompt} {hint} ").lower()
+        if not answer and default is not None:
+            return default
+        if answer in ("s", "sim", "y", "yes"):
+            return True
+        if answer in ("n", "não", "nao", "no"):
+            return False
+
+
+def ask_choice(prompt, options):
+    """`options`: (value, label) pairs. Returns the value picked."""
+    print(bold(prompt))
+    for i, (_, label) in enumerate(options, 1):
+        print(f"  {i}) {label}")
+    print(dim("  q) sair e deixar a sessão pausada"))
+    while True:
+        answer = ask("> ")
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return options[int(answer) - 1][0]
+
+
+def ask_text(prompt):
+    while True:
+        answer = ask(f"{prompt}: ")
+        if answer:
+            return answer
+
+
+def ask_decision(result):
+    """Asks for the decision the pause waits for, from its schema."""
+    awaiting = result["awaiting"]
+    schema = awaiting.get("schema") or {}
+    props = schema.get("properties") or {}
+
+    if schema.get("type") == "boolean":
+        approve = ask_choice("Decisão:", [(True, "Aprovar"), (False, "Descartar")])
+        return approve
+
+    if "approved" in props:
+        approved = ask_choice("Decisão:", [(True, "Aprovar"), (False, "Pedir outra proposta")])
+        if approved:
+            return {"approved": True}
+        return {"approved": False, "feedback": ask_text("O que deve mudar")}
+
+    if "action" in props:
+        labels = {"Approve": "Aprovar", "Revise": "Pedir correção", "Reject": "Rejeitar a história"}
+        action = ask_choice("Decisão:", [(a, labels.get(a, a)) for a in props["action"].get("enum", [])])
+        decision = {"action": action}
+        if action == "Revise":
+            decision["feedback"] = ask_text("O que deve ser corrigido")
+            if "revise_specs" in props:
+                decision["revise_specs"] = ask_yes("A correção exige mudar as specs (requisitos ou decisões)?", False)
+        elif action == "Approve" and "dod_confirmed" in props:
+            decision["dod_confirmed"] = ask_yes("Todos os critérios da Definition of Done foram atendidos?")
+        elif action == "Reject" and not ask_yes("Rejeitar encerra a sessão sem concluir a história. Confirma?", False):
+            return ask_decision(result)
+        return decision
+
+    # Another gate: one question per field.
+    decision = {}
+    for key, spec in props.items():
+        if spec.get("enum"):
+            decision[key] = ask_choice(f"{key}:", [(e, e) for e in spec["enum"]])
+        elif spec.get("type") == "boolean":
+            decision[key] = ask_yes(f"{key}?")
+        else:
+            decision[key] = ask(f"{key}: ")
+    return decision
+
+
+def retry(project, name):
+    """Runs a failed step again. A run that failed at its first step has no
+    checkpoint yet: it takes its inputs again."""
+    session = project.sessions[name]
+    first = session.get("failed_step") == session.get("first_step")
+    return run_mhl(project, name, resume=True, inputs=session.get("inputs") if first else None)
+
+
+def guide(project, name, result, once=False):
+    """At each pause: shows what to review, asks, resumes. Until the session
+    ends, fails, or the user leaves it paused."""
+    while True:
+        show_result(project, name, result)
+        status = project.sessions[name]["status"]
+        if status == "failed":
+            try:
+                if not ask_yes("Tentar o passo de novo agora?", False):
+                    return
+            except Quit:
+                return
+            print()
+            result = retry(project, name) or result
+            continue
+        if status != "paused":
+            return
+        print()
+        try:
+            decision = ask_decision(result)
+        except Quit:
+            print(dim(f"\nSessão {name} continua pausada. Retome com `agilespec next -s {name}`."))
+            return
+        print()
+        resumed = run_mhl(project, name, resume=True, decision=decision)
+        if resumed is None:
+            continue  # refused before running: ask again
+        result = resumed
+        if once:
+            show_result(project, name, result)
+            return
+
+
+# ── Commands ────────────────────────────────────────────────────────────
+
+
+def start(project, name, kind, inputs, guided):
+    project.sessions[name] = {"workflow": WORKFLOWS[kind], "kind": kind, "status": "starting", "created": time.strftime("%Y-%m-%d %H:%M:%S"), "inputs": inputs}
+    if kind == "story":
+        project.sessions[name]["story_id"] = inputs["story_id"]
+    project.save()
+    print(bold(f"▶ {name}") + dim(f"  ({project.root})"))
+    result = run_mhl(project, name, inputs=inputs)
+    if result is None:
+        # mhl refused the inputs: nothing ran, the session does not exist.
+        del project.sessions[name]
+        project.save()
+        raise CliError("A execução não começou.")
+    if guided:
+        guide(project, name, result)
+    else:
+        show_result(project, name, result)
+
+
+def cmd_inception(project, args):
+    busy = [n for n, s in project.sessions.items() if s["kind"] == "inception" and s["status"] in OPEN]
+    if busy:
+        raise CliError(f"A iniciação já está em andamento na sessão {busy[0]}: `agilespec next -s {busy[0]}`.")
+    brief = args.brief
+    if brief == "-":
+        brief = sys.stdin.read()
+    elif Path(brief).expanduser().is_file():
+        brief = Path(brief).expanduser().read_text()
+    if not brief.strip():
+        raise CliError("O brief está vazio.")
+    name = project.new_session_name("inception")
+    start(project, name, "inception", {"project_dir": str(project.root), "brief": brief}, guided(args))
+
+
+def parse_verify(text):
+    text = text.strip()
+    argv = json.loads(text) if text.startswith("[") else shlex.split(text)
+    if not argv or not all(isinstance(a, str) for a in argv):
+        raise CliError("--verify deve ser um comando, como \"python3 -m pytest\", ou um array JSON.")
+    return argv
+
+
+def cmd_story(project, args):
+    story_id = str(args.id)
+    busy = [n for n, s in project.sessions.items() if s.get("story_id") == story_id and s["status"] in OPEN]
+    if busy:
+        raise CliError(f"A história {story_id} já está em andamento na sessão {busy[0]}: `agilespec next -s {busy[0]}`.")
+    if args.verify:
+        verify = parse_verify(args.verify)
+        project.state["verify_command"] = verify  # the project's default from now on
+    else:
+        verify = project.state.get("verify_command")
+        if not verify:
+            raise CliError("Informe o comando de testes do projeto na primeira história: --verify \"python3 -m pytest\".")
+    inputs = {
+        "project_dir": str(project.root),
+        "story_id": story_id,
+        "verify_command": verify,
+        "specification_mode": "Draft" if args.draft else "Existing",
+        "ui_changes": args.ui,
+        "database_changes": args.db,
+    }
+    if args.max_attempts:
+        inputs["max_attempts"] = args.max_attempts
+    name = project.new_session_name(f"story-{story_id}")
+    start(project, name, "story", inputs, guided(args))
+
+
+def cmd_status(project, args):
+    sessions = project.sessions
+    if args.json:
+        print(json.dumps(sessions, ensure_ascii=False, indent=2))
+        return
+    print(bold(f"Projeto: {project.root}"))
+    if project.state.get("verify_command"):
+        print(dim(f"Testes: {shlex.join(project.state['verify_command'])}"))
+    if not sessions:
+        print("Nenhuma sessão ainda. Comece com `agilespec inception` ou `agilespec story <id>`.")
+        return
+    for name, s in sessions.items():
+        status = s["status"]
+        label = LABELS.get(status, status)
+        if status == "paused":
+            label = yellow(f"{label}: {STEP_TITLES.get(s.get('awaiting'), s.get('awaiting'))}")
+        elif status == "failed":
+            label = red(f"{label} em {s.get('failed_step', '?')}")
+        elif status == "done":
+            label = green(label)
+        print(f"  {name:<14} {label}  {dim(s.get('updated', ''))}")
+    open_ones = [n for n, s in sessions.items() if s["status"] in OPEN]
+    if open_ones:
+        print(dim(f"\nContinue com `agilespec next{'' if len(open_ones) == 1 else ' -s ' + open_ones[0]}`."))
+
+
+def current(project, args):
+    name = project.pick(args.session)
+    result = project.last_result(name)
+    if result is None:
+        raise CliError(f"Sem registro da última execução de {name}.")
+    return name, result
+
+
+def cmd_show(project, args):
+    name, result = current(project, args)
+    show_result(project, name, result)
+
+
+def cmd_next(project, args):
+    name, result = current(project, args)
+    if project.sessions[name]["status"] not in OPEN:
+        show_result(project, name, result)
+        return
+    guide(project, name, result, once=args.once)
+
+
+def decide(project, args, make):
+    """Answers the pending pause without questions (for scripts and agents)."""
+    name, result = current(project, args)
+    if project.sessions[name]["status"] != "paused":
+        raise CliError(f"A sessão {name} não está aguardando decisão ({LABELS.get(project.sessions[name]['status'])}).")
+    decision = make(result["awaiting"], result.get("awaiting", {}).get("schema") or {})
+    resumed = run_mhl(project, name, resume=True, decision=decision)
+    if resumed is None:
+        raise CliError("A decisão foi recusada; a sessão continua na mesma pausa.")
+    show_result(project, name, resumed)
+
+
+def cmd_approve(project, args):
+    def make(awaiting, schema):
+        props = schema.get("properties") or {}
+        if schema.get("type") == "boolean":
+            return True
+        if "approved" in props:
+            return {"approved": True}
+        if "dod_confirmed" in props:
+            if not args.dod:
+                raise CliError("Aprovar a consolidação confirma a Definition of Done: use `agilespec approve --dod` depois de conferir todos os critérios.")
+            return {"action": "Approve", "dod_confirmed": True}
+        return {"action": "Approve"}
+
+    decide(project, args, make)
+
+
+def cmd_revise(project, args):
+    def make(awaiting, schema):
+        props = schema.get("properties") or {}
+        if schema.get("type") == "boolean":
+            raise CliError("A iniciação não aceita correção: descarte-a (`agilespec reject`) e comece outra com o brief corrigido.")
+        if "approved" in props:
+            return {"approved": False, "feedback": args.feedback}
+        return {"action": "Revise", "feedback": args.feedback, "revise_specs": args.specs}
+
+    decide(project, args, make)
+
+
+def cmd_reject(project, args):
+    def make(awaiting, schema):
+        props = schema.get("properties") or {}
+        if schema.get("type") == "boolean":
+            return False
+        if "action" not in props:
+            raise CliError("Esta pausa não aceita rejeição: aprove ou peça outra proposta com `agilespec revise \"...\"`.")
+        return {"action": "Reject"}
+
+    decide(project, args, make)
+
+
+def cmd_decide(project, args):
+    try:
+        value = json.loads(args.decision)
+    except ValueError:
+        raise CliError("A decisão deve ser JSON, como '{\"action\": \"Approve\"}' ou true.")
+    decide(project, args, lambda awaiting, schema: value)
+
+
+def cmd_redo(project, args):
+    name = project.pick(args.session)
+    session = project.sessions[name]
+    if session["kind"] != "story":
+        raise CliError("Só as fases de uma história podem ser refeitas.")
+    if session["status"] not in OPEN:
+        raise CliError(f"A sessão {name} já terminou ({LABELS.get(session['status'])}).")
+    stage = next((s for s in STAGES if s.lower() == args.stage.lower()), None)
+    if stage is None:
+        raise CliError(f"Fase desconhecida: {args.stage}. Use {', '.join(STAGES)}.")
+    print(bold(f"↺ {name}: refazendo {stage}"))
+    result = run_mhl(project, name, resume=True, from_stage=stage)
+    if result is None:
+        raise CliError("A fase não foi refeita.")
+    if guided(args):
+        guide(project, name, result)
+    else:
+        show_result(project, name, result)
+
+
+def guided(args):
+    return not args.no_guide and sys.stdin.isatty()
+
+
+# ── Entry point ─────────────────────────────────────────────────────────
+
+
+def parser():
+    p = argparse.ArgumentParser(
+        prog="agilespec",
+        description="Conduz o ciclo AgileSpec em MHL passo a passo: iniciação, histórias, revisões e decisões.",
+    )
+    p.add_argument("--project", help="pasta do projeto (padrão: $AGILESPEC_PROJECT ou a pasta atual)")
+    sub = p.add_subparsers(dest="command", required=True, metavar="comando")
+
+    def session_arg(c):
+        c.add_argument("-s", "--session", help="a sessão (padrão: a única em aberto)")
+
+    def guide_arg(c):
+        c.add_argument("--no-guide", action="store_true", help="não perguntar a decisão; só parar na pausa")
+
+    c = sub.add_parser("inception", help="propõe as specs globais a partir de um brief")
+    c.add_argument("--brief", required=True, help="arquivo com o contexto e o backlog, o próprio texto, ou - para ler da entrada")
+    guide_arg(c)
+    c.set_defaults(run=cmd_inception)
+
+    c = sub.add_parser("story", help="especifica, implementa e consolida uma história do backlog")
+    c.add_argument("id", help="número da história no backlog (1 para `1. [ ] ...`)")
+    c.add_argument("--draft", action="store_true", help="propor as specs da história (padrão: ler as já preparadas)")
+    c.add_argument("--ui", action="store_true", help="a história muda a interface (exige views.md)")
+    c.add_argument("--db", action="store_true", help="a história muda o banco (exige tables.md)")
+    c.add_argument("--verify", help="comando de testes do projeto, guardado para as próximas histórias")
+    c.add_argument("--max-attempts", type=int, help="máximo de implementações (padrão 3)")
+    guide_arg(c)
+    c.set_defaults(run=cmd_story)
+
+    c = sub.add_parser("next", help="mostra a pausa pendente, pergunta a decisão e continua")
+    session_arg(c)
+    c.add_argument("--once", action="store_true", help="parar depois de uma decisão")
+    c.set_defaults(run=cmd_next)
+
+    c = sub.add_parser("status", help="lista as sessões do projeto")
+    c.add_argument("--json", action="store_true")
+    c.set_defaults(run=cmd_status)
+
+    c = sub.add_parser("show", help="mostra de novo a última pausa ou o desfecho")
+    session_arg(c)
+    c.set_defaults(run=cmd_show)
+
+    c = sub.add_parser("approve", help="aprova a pausa pendente, sem perguntas")
+    session_arg(c)
+    c.add_argument("--dod", action="store_true", help="na consolidação: confirmo todos os critérios da Definition of Done")
+    c.set_defaults(run=cmd_approve)
+
+    c = sub.add_parser("revise", help="pede correção na pausa pendente, sem perguntas")
+    session_arg(c)
+    c.add_argument("feedback", help="o que deve mudar")
+    c.add_argument("--specs", action="store_true", help="a correção exige mudar as specs")
+    c.set_defaults(run=cmd_revise)
+
+    c = sub.add_parser("reject", help="rejeita a história (ou descarta a iniciação), sem perguntas")
+    session_arg(c)
+    c.set_defaults(run=cmd_reject)
+
+    c = sub.add_parser("decide", help="responde a pausa pendente com uma decisão JSON")
+    session_arg(c)
+    c.add_argument("decision", help="JSON do tipo que a pausa espera")
+    c.set_defaults(run=cmd_decide)
+
+    c = sub.add_parser("redo", help="refaz uma fase da história (Specification, Implementation, Consolidation)")
+    c.add_argument("stage")
+    session_arg(c)
+    guide_arg(c)
+    c.set_defaults(run=cmd_redo)
+    return p
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    try:
+        project = Project(args.project or os.environ.get("AGILESPEC_PROJECT") or os.getcwd())
+        args.run(project, args)
+    except CliError as e:
+        sys.stdout.flush()
+        print(red(f"agilespec: {e}"), file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print(dim("\ninterrompido"), file=sys.stderr)
+        return 130
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

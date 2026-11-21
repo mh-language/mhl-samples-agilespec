@@ -26,3 +26,4 @@ mhl run "$workflow_dir/story.mh" --dry-run \
   --input 'verify_command=["python3","-m","pytest"]'
 
 python3 "$workflow_dir/tests/resume_test.py"
+python3 "$workflow_dir/tests/cli_test.py"
