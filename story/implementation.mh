@@ -1,9 +1,11 @@
 import {StoryImplementer} from "../lib/agents.mh"
 import {ImplementationPrompt} from "../lib/prompts.mh"
-import {Specs, Verification, ReviewAction} from "../lib/contracts.mh"
+import {Specs, Verification, ReviewAction, CodeReview} from "../lib/contracts.mh"
 
 // Fase 2: tentativas de implementação, verificação e revisão humana.
-partial workflow AgileSpecStory stage implementation {
+// A revisão encaminha para PrepareRevision ou Rejected, no fragmento de
+// entrada (story.mh): eles valem para a história inteira, não para esta fase.
+partial workflow AgileSpecStory stage Implementation {
     step StartAttempt {
         self.attempt = attempt + 1
     }
@@ -42,55 +44,49 @@ partial workflow AgileSpecStory stage implementation {
     }
 
     step ReviewImplementation {
-        if (review_round != attempt || review_action == ReviewAction.Pending) {
-            pause(
-                "Revise código, implementation-${attempt}.json e " +
-                "verification-${attempt}.json em ${review_folder}. Valide manualmente. " +
-                "Retome com review_round=${attempt} e review_action=Approve, Revise ou Reject."
-            )
-        }
+        var d = pause(
+            "${review_notice}Revise código, implementation-${attempt}.json e " +
+            "verification-${attempt}.json em ${review_folder}. Valide manualmente. " +
+            "Retome com --decision: '{\"action\": \"Approve\"}', " +
+            "'{\"action\": \"Revise\", \"feedback\": \"...\", \"revise_specs\": false}' " +
+            "ou '{\"action\": \"Reject\"}'.",
+            decision: CodeReview
+        )
 
-        if (review_action == ReviewAction.Reject) {
+        self.review_notice = ""
+
+        if (d.action == ReviewAction.Reject) {
             goto Rejected
         }
 
-        if (review_action == ReviewAction.Revise) {
+        if (d.action == ReviewAction.Revise) {
+            var note = d.get("feedback", "")
+
+            if (note.trim().is_empty()) {
+                self.review_notice = "Uma revisão exige feedback. "
+
+                goto ReviewImplementation
+            }
+
+            self.feedback = note
+            self.revise_specs = d.get("revise_specs", false)
+
             goto PrepareRevision
         }
 
+        // An approval this attempt cannot take asks again, saying why.
         if (!verification.passed) {
-            fail("Cannot approve: automated tests failed. Resume with review_action=Revise and feedback.")
+            self.review_notice = "Não é possível aprovar: os testes automatizados falharam; peça uma revisão. "
+
+            goto ReviewImplementation
         }
 
         if (implementation.status != "ready") {
-            fail("Cannot approve: implementation is blocked. Request revision with clarification.")
+            self.review_notice = "Não é possível aprovar: a implementação está bloqueada; peça uma revisão com esclarecimento. "
+
+            goto ReviewImplementation
         }
 
-        goto DraftConsolidation
-    }
-
-    step PrepareRevision {
-        if (feedback.trim().is_empty()) {
-            fail("Revision requires human feedback")
-        }
-
-        if (attempt >= max_attempts) {
-            fail("Revision limit reached (${max_attempts}); start a new session after reviewing scope")
-        }
-
-        if (revise_specs) {
-            self.spec_round = spec_round + 1
-            self.story_before = story
-
-            goto DraftSpecification
-        }
-
-        goto StartAttempt
-    }
-
-    step Rejected {
-        self.status = "rejected"
-
-        break "Story ${story_id} rejected by human review; backlog remains pending"
+        goto Consolidation
     }
 }

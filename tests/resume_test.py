@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Exercise actual on-disk checkpoints; Name.run() cannot test --resume."""
+"""Exercise actual on-disk checkpoints; Name.run() cannot test --resume.
+
+The human gates are typed (`pause(..., decision: T)`): each resume below
+answers the gate the run waits at with `--decision '<json>'`.
+"""
 
 import json
 import os
@@ -12,7 +16,7 @@ MOCK = str(WORKFLOW_DIR / "tests/mock-agent.py")
 ENV = dict(os.environ, AGILESPEC_SPEC_CMD=MOCK, AGILESPEC_CODE_CMD=MOCK)
 
 
-def run(repo, file, session, resume=False, expect_failure=False, **inputs):
+def run(repo, file, session, resume=False, expect_failure=False, decision=None, from_stage=None, **inputs):
     argv = [
         "mhl",
         "run",
@@ -25,6 +29,12 @@ def run(repo, file, session, resume=False, expect_failure=False, **inputs):
 
     if resume:
         argv.append("--resume")
+
+    if decision is not None:
+        argv.extend(["--decision", json.dumps(decision)])
+
+    if from_stage is not None:
+        argv.extend(["--from", from_stage])
 
     for key, value in inputs.items():
         value = json.dumps(value) if not isinstance(value, str) else value
@@ -50,6 +60,7 @@ def run(repo, file, session, resume=False, expect_failure=False, **inputs):
 def paused(result, step):
     assert result.get("paused") is True, result
     assert result["executed"][-1] == step, result
+    assert result["awaiting"]["step"] == step, result
 
 
 def backlog(repo):
@@ -67,9 +78,10 @@ with tempfile.TemporaryDirectory(prefix="agilespec-mhl-resume-") as tmp:
         brief="One feature; a second feature next",
     )
     paused(first, "ApproveInception")
+    assert first["awaiting"]["type"] == "bool", first
     assert not (repo / "AgileSpec/project").exists()
 
-    approved = run(repo, "inception.mh", "inception", resume=True, approved=True)
+    approved = run(repo, "inception.mh", "inception", resume=True, decision=True)
     assert approved["ok"] and not approved.get("paused"), approved
     assert "DraftInception" not in approved["executed"], approved
     assert "1. [ ]" in backlog(repo)
@@ -100,7 +112,7 @@ with tempfile.TemporaryDirectory(prefix="agilespec-mhl-resume-") as tmp:
         "story.mh",
         "story1",
         resume=True,
-        specs_approved_round=1,
+        decision={"approved": True},
         expect_failure=True,
     )
     (repo / ".mock-mode").unlink()
@@ -109,51 +121,63 @@ with tempfile.TemporaryDirectory(prefix="agilespec-mhl-resume-") as tmp:
     assert implemented["vars"]["attempt"] == 1
     assert "StartAttempt" not in implemented["executed"], implemented
 
+    # A decision of another gate's shape is refused before anything runs.
+    wrong = run(
+        repo, "story.mh", "story1", resume=True, decision={"approved": True}, expect_failure=True
+    )
+    assert "invalid_decision" in wrong, wrong
+
     # A specification defect requires a fresh human approval, before more coding.
     revised = run(
         repo,
         "story.mh",
         "story1",
         resume=True,
-        review_action="Revise",
-        review_round=1,
-        feedback="Clarify invalid input handling",
-        revise_specs=True,
+        decision={
+            "action": "Revise",
+            "feedback": "Clarify invalid input handling",
+            "revise_specs": True,
+        },
     )
     paused(revised, "ApproveSpecification")
     assert revised["vars"]["spec_round"] == 2
     assert revised["vars"]["attempt"] == 1
 
-    second = run(repo, "story.mh", "story1", resume=True, specs_approved_round=2)
+    second = run(repo, "story.mh", "story1", resume=True, decision={"approved": True})
     paused(second, "ReviewImplementation")
     assert second["vars"]["attempt"] == 2
     assert "1. [ ]" in backlog(repo)
 
     consolidation = run(
-        repo, "story.mh", "story1", resume=True, review_action="Approve", review_round=2
+        repo, "story.mh", "story1", resume=True, decision={"action": "Approve"}
     )
     paused(consolidation, "ApproveConsolidation")
     assert "1. [ ]" in backlog(repo)
     assert "Feature view" not in (repo / "AgileSpec/project/ui.md").read_text()
 
-    # Old decisions cannot approve a newer implementation/consolidation.
-    stale = run(
-        repo,
-        "story.mh",
-        "story1",
-        resume=True,
-        consolidation_approved_round=1,
-        dod_confirmed_round=1,
+    # A plain resume never approves: the gate asks again.
+    still = run(repo, "story.mh", "story1", resume=True)
+    paused(still, "ApproveConsolidation")
+
+    # Approval without confirming the Definition of Done asks again, saying why.
+    unconfirmed = run(
+        repo, "story.mh", "story1", resume=True, decision={"action": "Approve"}
     )
-    paused(stale, "ApproveConsolidation")
+    paused(unconfirmed, "ApproveConsolidation")
+    assert "dod_confirmed" in unconfirmed["pause_reason"], unconfirmed
+
+    # Redo only the consolidation phase: a new proposal, same attempt.
+    redone = run(repo, "story.mh", "story1", resume=True, from_stage="Consolidation")
+    paused(redone, "ApproveConsolidation")
+    assert redone["executed"][0] == "DraftConsolidation", redone
+    assert redone["vars"]["attempt"] == 2
 
     done = run(
         repo,
         "story.mh",
         "story1",
         resume=True,
-        consolidation_approved_round=2,
-        dod_confirmed_round=2,
+        decision={"action": "Approve", "dod_confirmed": True},
     )
     assert done["ok"] and not done.get("paused"), done
     assert done["vars"]["status"] == "done", done
@@ -176,5 +200,6 @@ with tempfile.TemporaryDirectory(prefix="agilespec-mhl-resume-") as tmp:
     assert "already complete" in failure, failure
 
 print(
-    "CLI integration: inception + story pause/resume, specification rework, stale approvals, consolidation and completion passed."
+    "CLI integration: inception + story pause/resume with typed decisions, specification rework, "
+    "refused decisions, redoing a stage, consolidation and completion passed."
 )

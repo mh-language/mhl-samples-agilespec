@@ -1,4 +1,18 @@
-export enum ReviewAction { Pending, Approve, Revise, Reject }
+export enum ReviewAction { Approve, Revise, Reject }
+
+// Decisions the story's human gates wait for — `pause(..., decision: T)`.
+// A resume passes one with `--decision '<json>'` (MCP: run/resume
+// {decision}); it answers that gate once.
+export type SpecReview = { approved: bool, feedback?: string }
+
+export type CodeReview = { action: ReviewAction, feedback?: string, revise_specs?: bool }
+
+export type ConsolidationReview = {
+    action: ReviewAction,
+    dod_confirmed?: bool,
+    feedback?: string,
+    revise_specs?: bool
+}
 export enum SpecificationMode { Existing, Draft }
 
 export tool Specs {
@@ -240,13 +254,12 @@ export tool Specs {
         self.string_list(proposal?.discrepancies, "discrepancies")
         self.string_list(proposal?.pending_dod, "pending_dod")
 
-        if (!proposal.discrepancies.is_empty()) {
-            fail("Code/spec discrepancies: ${proposal.discrepancies.join("; ")}")
-        }
-
-        if (!proposal.pending_dod.is_empty()) {
-            fail("Unmet Definition of Done: ${proposal.pending_dod.join("; ")}")
-        }
+        // Discrepancies and unmet DoD are for the human at the consolidation
+        // gate, which then refuses approval: reported, not raised.
+        var problems = [
+            ...proposal.discrepancies.map((d) -> "Code/spec discrepancy: ${d}"),
+            ...proposal.pending_dod.map((d) -> "Unmet Definition of Done: ${d}")
+        ]
 
         self.pending(files["backlog.md"], story_id)
 
@@ -258,7 +271,7 @@ export tool Specs {
             fail("Consolidation must preserve all backlog IDs and checkbox states")
         }
 
-        return files
+        return {files, problems}
     }
 
     statuses(backlog: string): string[] -> backlog.split("\n")

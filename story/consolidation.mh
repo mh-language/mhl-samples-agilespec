@@ -1,14 +1,19 @@
 import {SpecAuthor} from "../lib/agents.mh"
 import {ConsolidationPrompt} from "../lib/prompts.mh"
-import {Specs, ReviewAction} from "../lib/contracts.mh"
+import {Specs, ReviewAction, ConsolidationReview} from "../lib/contracts.mh"
 
 // Fase 3: consolidação das specs globais, Definition of Done e conclusão.
-partial workflow AgileSpecStory stage consolidation {
-    step DraftConsolidation timeout 12m {
-        if (review_round == attempt && review_action == ReviewAction.Revise) {
-            goto PrepareRevision
-        }
+// Refazer só esta fase (outra proposta de consolidação, sem revisar código):
+// `mhl run story.mh --session ... --resume --from Consolidation`.
+partial workflow AgileSpecStory stage Consolidation {
+    // Estado desta fase apenas.
+    var consolidated = {}
+    var consolidation_problems = []
 
+    var completion_before = {}
+    var completion_after = {}
+
+    step DraftConsolidation timeout 12m {
         Specs.same(project_folder, project)
         Specs.same(story_folder, story)
 
@@ -23,25 +28,70 @@ partial workflow AgileSpecStory stage consolidation {
 
         var raw = SpecAuthor.run(repo: project_dir, prompt: ConsolidationPrompt(data: data))
 
-        self.consolidated = Specs.consolidation(raw, project, story, story_id)
+        var proposal = Specs.consolidation(raw, project, story, story_id)
+
+        self.consolidated = proposal.files
+        self.consolidation_problems = proposal.problems
 
         Specs.same(project_folder, project)
         Specs.same(story_folder, story)
 
-        Specs.artifact(review_folder, "consolidation.json", {before: project, files: consolidated})
+        Specs.artifact(review_folder, "consolidation.json", {
+            before: project,
+            files: consolidated,
+            problems: consolidation_problems
+        })
     }
 
     step ApproveConsolidation {
-        if (review_round == attempt && review_action == ReviewAction.Revise) {
+        var problems = ""
+
+        if (!consolidation_problems.is_empty()) {
+            problems = "A consolidação apontou: ${consolidation_problems.join("; ")}. " +
+                "Peça uma revisão, rejeite, ou refaça a consolidação com --from Consolidation. "
+        }
+
+        var d = pause(
+            "${review_notice}${problems}Revise ${review_folder}/consolidation.json e a Definition of Done. " +
+            "Retome com --decision: '{\"action\": \"Approve\", \"dod_confirmed\": true}' " +
+            "somente após atender todos os critérios, " +
+            "'{\"action\": \"Revise\", \"feedback\": \"...\", \"revise_specs\": false}' " +
+            "ou '{\"action\": \"Reject\"}'.",
+            decision: ConsolidationReview
+        )
+
+        self.review_notice = ""
+
+        if (d.action == ReviewAction.Reject) {
+            goto Rejected
+        }
+
+        if (d.action == ReviewAction.Revise) {
+            var note = d.get("feedback", "")
+
+            if (note.trim().is_empty()) {
+                self.review_notice = "Uma revisão exige feedback. "
+
+                goto ApproveConsolidation
+            }
+
+            self.feedback = note
+            self.revise_specs = d.get("revise_specs", false)
+
             goto PrepareRevision
         }
 
-        if (consolidation_approved_round != attempt || dod_confirmed_round != attempt) {
-            pause(
-                "Revise ${review_folder}/consolidation.json e a Definition of Done. " +
-                "Retome com consolidation_approved_round=${attempt} e " +
-                "dod_confirmed_round=${attempt} somente após atender todos os critérios."
-            )
+        // An approval the consolidation cannot take asks again, saying why.
+        if (!consolidation_problems.is_empty()) {
+            self.review_notice = "Não é possível aprovar uma consolidação com problemas. "
+
+            goto ApproveConsolidation
+        }
+
+        if (!d.get("dod_confirmed", false)) {
+            self.review_notice = "Confirme todos os critérios da Definition of Done (dod_confirmed: true). "
+
+            goto ApproveConsolidation
         }
     }
 
@@ -63,8 +113,8 @@ partial workflow AgileSpecStory stage consolidation {
             spec_round,
             verification,
             manual_validation_approved: true,
-            consolidation_approved_round,
-            dod_confirmed_round
+            consolidation_approved: true,
+            dod_confirmed: true
         })
 
         self.status = "done"

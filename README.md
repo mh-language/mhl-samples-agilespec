@@ -2,96 +2,92 @@
   <img src="assets/logo-mhl-agilespec.png" alt="MHL + AgileSpec" width="600">
 </p>
 
-# AgileSpec em MHL
+# AgileSpec in MHL
 
-Implementação executável do ciclo de entrega do [AgileSpec](../AgileSpec/README.md)
-em **[Meta-Harness Language (MHL)](https://github.com/mh-language/mhl-core-runtime)**,
-com arquivos `.mh`. Preserva as especificações em Markdown junto ao código e expressa
-a orquestração, decisões humanas, verificações e ciclos de correção em MHL.
+Executable implementation of the [AgileSpec](../AgileSpec/README.md) delivery cycle
+in **[Meta-Harness Language (MHL)](https://github.com/mh-language/mhl-core-runtime)**,
+using `.mh` files. It keeps the Markdown specifications next to the code and
+expresses orchestration, human decisions, checks and correction cycles in MHL.
 
-Os workflows foram construídos usando o
+The workflows were built using
 [MHL Studio](https://mh-language.github.io/mhl-core-runtime/download.html#studio).
 
-O fluxo pressupõe que o discovery já produziu um backlog. Trabalha uma história
-por sessão, escolhida por uma pessoa; depois da consolidação, a próxima sessão lê
-as especificações globais atualizadas. Não impõe cerimônias ágeis nem um plano
-de tarefas ao agente implementador.
+The flow assumes discovery has already produced a backlog. It works on one story
+per session, chosen by a person; after consolidation, the next session reads the
+updated global specifications. It does not impose agile ceremonies or a task plan
+on the implementing agent.
 
-## Correspondência com o AgileSpec
+## Mapping to AgileSpec
 
-| Atividade | Implementação | Condição para avançar |
+| Activity | Implementation | Condition to advance |
 | --- | --- | --- |
-| Inception | `inception.mh` propõe os cinco documentos globais | Aprovação humana antes de gravar |
-| Specification | `story.mh` lê specs existentes ou propõe uma versão | Aprovação da rodada de especificação |
-| Implementation | Agente edita código e testes usando os dois níveis de specs | Relatório estruturado e specs preservadas |
-| Review and Verification | MHL executa o comando de testes; pessoa revisa e valida manualmente | Testes aprovados e aprovação da rodada implementada |
-| Correção | Volta à implementação ou à especificação com feedback | Nova aprovação; no máximo `max_attempts` implementações |
-| Consolidation | Propõe documentos globais a partir da história e do código | Sem discrepâncias ou DoD pendente; aprovação humana |
-| Conclusão | Publica consolidação e, em seguida, marca só a história selecionada | Confirmação humana de toda a Definition of Done |
+| Inception | `inception.mh` proposes the five global documents | Human approval before writing |
+| Specification | `story.mh` reads existing specs or proposes a version | Approval of the specification round |
+| Implementation | Agent edits code and tests using both levels of specs | Structured report and specs preserved |
+| Review and Verification | MHL runs the test command; a person reviews and validates manually | Tests pass and the implemented round is approved |
+| Correction | Returns to implementation or specification with feedback (`Revise` decision) | New approval; at most `max_attempts` implementations |
+| Consolidation | Proposes global documents from the story and the code | No discrepancies or pending DoD; human approval |
+| Completion | Publishes the consolidation and then marks only the selected story | Human confirmation of the full Definition of Done |
 
 ```mermaid
 flowchart TD
-    I[Inception: proposta global] --> IG{Aprovação humana}
+    I[Inception: global proposal] --> IG{Human approval}
     IG --> P[Project Specs]
-    P --> S[Selecionar e especificar história]
-    S --> SG{Aprovar rodada de specs}
-    SG --> C[Implementar código e testes]
-    C --> T[Executar testes do projeto]
-    T --> R{Revisão e validação humana}
-    R -->|Revisar código| C
-    R -->|Revisar specs| S
-    R -->|Rejeitar| X[Encerrar sem concluir]
-    R -->|Aprovar e testes passam| D[Propor consolidação]
-    D --> G{Aprovar consolidação e DoD}
-    G --> A[Publicar specs globais]
-    A --> B[Marcar história concluída]
+    P --> S[Select and specify story]
+    S --> SG{Approve spec round}
+    SG --> C[Implement code and tests]
+    C --> T[Run project tests]
+    T --> R{Human review and validation}
+    R -->|Revise code| C
+    R -->|Revise specs| S
+    R -->|Reject| X[End without completing]
+    R -->|Approve and tests pass| D[Propose consolidation]
+    D --> G{Approve consolidation and DoD}
+    G --> A[Publish global specs]
+    A --> B[Mark story as done]
     B --> P
 ```
 
 ## MHL Studio
 
-O [MHL Studio](https://mh-language.github.io/mhl-core-runtime/download.html#studio)
-exibe cada workflow como um grafo de passos, com transições condicionais, pausas
-de aprovação humana e as ferramentas chamadas em cada passo:
+[MHL Studio](https://mh-language.github.io/mhl-core-runtime/download.html#studio)
+shows each workflow as a graph, with its stages, conditional transitions, human
+approval pauses and the tools called in each step. Beside it, the same workflow
+can be edited as `.mh` code, while the inspector shows its name, description and
+inputs with types and default values:
 
-![Grafo do workflow AgileSpecStory no MHL Studio](assets/studio-flow.png)
+![Graph, code editor and inspector for the AgileSpecStory workflow in MHL Studio](assets/studio.png)
 
-O mesmo workflow pode ser editado como código `.mh`, enquanto o inspetor mostra
-nome, descrição e os inputs com tipos e valores padrão:
+With `mhl serve mcp`, `AgileSpecInception` and `AgileSpecStory` are exposed as
+MCP tools, alongside the run control tools (`mhl_run_start`, `mhl_run_resume`,
+`mhl_run_status`, etc.).
 
-![Editor de código e inspetor do workflow AgileSpecStory](assets/studio-code.png)
-
-Com `mhl serve mcp`, `AgileSpecInception` e `AgileSpecStory` ficam expostos como
-ferramentas MCP, junto às ferramentas de controle de execução (`mhl_run_start`,
-`mhl_run_resume`, `mhl_run_status` etc.):
-
-![Workflows expostos como ferramentas MCP no MHL Studio](assets/studio-mcp.png)
-
-## Estrutura
+## Structure
 
 ```text
 workflow-mhl/
-  inception.mh                 # entrada de iniciação
-  story.mh                     # entrada de entrega de uma história (inputs, estado, LoadContext)
-  story/                       # fragmentos `partial` do workflow AgileSpecStory
-    specification.mh           # proposta, aprovação e publicação das specs
-    implementation.mh          # tentativas, verificação e revisão humana
-    consolidation.mh           # consolidação, Definition of Done e conclusão
+  inception.mh                 # inception entry point
+  story.mh                     # single-story delivery entry point (inputs, state, LoadContext,
+                               # plus PrepareRevision and Rejected, which serve the whole story)
+  story/                       # one phase per file: `partial` fragments with a header `stage`
+    specification.mh           # stage Specification: spec proposal, approval and publication
+    implementation.mh          # stage Implementation: attempts, verification and human review
+    consolidation.mh           # stage Consolidation: consolidation, Definition of Done and completion
   lib/
-    agents.mh                  # CLIs de especificação e implementação
-    contracts.mh               # documentos, backlog, contratos e testes do projeto
-    prompts.mh                 # templates tipados com prompts externos
-  prompts/                     # instruções por atividade
-  examples/podlite-brief.txt    # exemplo de contexto inicial
-  tests/                       # testes MHL e integração real de checkpoint/resume
-  assets/                      # capturas de tela do MHL Studio
-  check.sh                     # verificação local, sem LLM ou rede
+    agents.mh                  # specification and implementation CLIs
+    contracts.mh               # documents, backlog, contracts and project tests
+    prompts.mh                 # typed templates with external prompts
+  prompts/                     # per-activity instructions
+  examples/podlite-brief.txt    # sample initial context
+  tests/                       # MHL tests and real checkpoint/resume integration
+  assets/                      # MHL Studio screenshots
+  check.sh                     # local verification, no LLM or network
 ```
 
-No projeto atendido, a estrutura original continua sendo:
+In the target project, the original structure remains:
 
 ```text
-meu-projeto/
+my-project/
   AgileSpec/
     project/
       backlog.md
@@ -102,8 +98,8 @@ meu-projeto/
     stories/story1/
       acceptance.md
       design.md
-      views.md                 # quando houver UI
-      tables.md                # quando houver banco
+      views.md                 # when there is UI
+      tables.md                # when there is a database
   .agilespec-mhl/
     inception/project-proposal.json
     story1/
@@ -114,151 +110,150 @@ meu-projeto/
       done.json
 ```
 
-`acceptance.md` exige seções `Normal Case` e `Edge Cases`. `views.md` e `tables.md`
-são opcionais; arquivos já existentes sempre entram no contexto e na consolidação.
-Quando `ui_changes=true` ou `database_changes=true`, o documento correspondente
-passa a ser obrigatório. Documentos globais sem aplicação ao projeto podem declarar
-isso explicitamente.
+`acceptance.md` requires `Normal Case` and `Edge Cases` sections. `views.md` and
+`tables.md` are optional; existing files are always included in the context and in
+consolidation. When `ui_changes=true` or `database_changes=true`, the corresponding
+document becomes mandatory. Global documents that do not apply to the project may
+state so explicitly.
 
-O backlog usa a convenção dos exemplos originais: `1. [ ] Descrição`,
-`2. [ ] Descrição`, etc. `story_id=1` identifica a entrada `1.` e a pasta `story1`.
-Histórias concluídas têm `[x]`. IDs duplicados, inválidos ou já concluídos são recusados.
+The backlog follows the convention of the original examples: `1. [ ] Description`,
+`2. [ ] Description`, etc. `story_id=1` identifies entry `1.` and folder `story1`.
+Completed stories are marked `[x]`. Duplicate, invalid or already completed IDs are
+rejected.
 
-## Instalar MHL e MHL Studio
+## Installing MHL and MHL Studio
 
-Instruções resumidas da [página de download](https://mh-language.github.io/mhl-core-runtime/download.html)
-e do [repositório](https://github.com/mh-language/mhl-core-runtime) do MHL. Consulte-os
-para detalhes e mudanças recentes.
+Summarized from the MHL [download page](https://mh-language.github.io/mhl-core-runtime/download.html)
+and [repository](https://github.com/mh-language/mhl-core-runtime). Check them for
+details and recent changes.
 
-### CLI `mhl`
+### `mhl` CLI
 
-Este projeto usa o **MHL 1.11.1**. Os comandos abaixo fixam essa versão.
+This project uses **MHL 1.13.0**. The commands below pin that version.
 
-macOS e Linux:
+macOS and Linux:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/mh-language/mhl-core-runtime/main/install.sh | MHL_VERSION=1.11.1 sh
+curl -fsSL https://raw.githubusercontent.com/mh-language/mhl-core-runtime/main/install.sh | MHL_VERSION=1.13.0 sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-$env:MHL_VERSION = "1.11.1"
+$env:MHL_VERSION = "1.13.0"
 irm https://raw.githubusercontent.com/mh-language/mhl-core-runtime/main/install.ps1 | iex
 ```
 
-O instalador coloca o `mhl` em `~/.mhl/bin` (`%LOCALAPPDATA%\mhl\bin` no Windows) e
-o adiciona ao `PATH`. Abra um novo terminal e verifique se a versão é a 1.11.1:
+The installer puts `mhl` in `~/.mhl/bin` (`%LOCALAPPDATA%\mhl\bin` on Windows) and
+adds it to your `PATH`. Open a new terminal and check that the version is 1.13.0:
 
 ```sh
 mhl version
 ```
 
-- No macOS e Linux, `MHL_VERSION` deve ficar do lado do `sh` no pipe. Sem essa
-  variável, é instalada a versão estável mais recente. `MHL_INSTALL_DIR` altera o
-  diretório de instalação.
-- Há binários para Linux (amd64, arm64), macOS Apple Silicon e Windows (amd64, arm64).
-  Para Mac Intel, compile a partir do código-fonte (`cd src/mhl-runtime && make build`)
-  ou use o MHL Studio.
-- Se o VS Code estiver instalado, o script também instala a extensão da linguagem.
-  Para instalá-la manualmente: `code --install-extension mhl-language.mhl-language`.
+- On macOS and Linux, `MHL_VERSION` must be on the `sh` side of the pipe. Without
+  it, the latest stable release is installed. `MHL_INSTALL_DIR` changes the install
+  directory.
+- Binaries are available for Linux (amd64, arm64), Apple Silicon macOS and Windows
+  (amd64, arm64). On Intel Macs, build from source (`cd src/mhl-runtime && make build`)
+  or use MHL Studio.
+- If VS Code is installed, the script also installs the language extension.
+  To install it manually: `code --install-extension mhl-language.mhl-language`.
 
 ### MHL Studio
 
-O MHL Studio é um aplicativo desktop para macOS, Windows e Linux, com o runtime
-incluído. Os instaladores são publicados nas releases `studio-v` do GitHub, acessíveis
-pelo link **Download mhl studio** da
-[página de download](https://mh-language.github.io/mhl-core-runtime/download.html#studio).
+MHL Studio is a desktop app for macOS, Windows and Linux, with the runtime bundled.
+Installers are published in the `studio-v` GitHub releases, linked from
+**Download mhl studio** on the
+[download page](https://mh-language.github.io/mhl-core-runtime/download.html#studio).
 
-Se ainda não houver release disponível, compile a partir do código-fonte
-(requer Go, Node 22 e Rust):
+If no release is available yet, build it from source (requires Go, Node 22 and Rust):
 
 ```sh
 git clone https://github.com/mh-language/mhl-core-runtime
 cd mhl-core-runtime/src/mhl-studio
 npm install
-npm run tauri build   # gera um instalador para esta máquina
+npm run tauri build   # builds an installer for this machine
 ```
 
-Na primeira execução:
+On first launch:
 
-- **macOS:** arraste para Aplicativos. Se o sistema bloquear a abertura, use
-  clique direito → Abrir ou
+- **macOS:** drag it to Applications. If macOS blocks it, right-click → Open or run
   `xattr -dr com.apple.quarantine "/Applications/mhl studio.app"`.
-- **Windows:** no SmartScreen, clique em *Mais informações* → *Executar assim mesmo*.
-- **Linux:** `chmod +x mhl.studio_*.AppImage` e execute o AppImage, ou instale o
-  pacote `.deb`/`.rpm` pelo gerenciador de pacotes.
+- **Windows:** in SmartScreen, click *More info* → *Run anyway*.
+- **Linux:** `chmod +x mhl.studio_*.AppImage` and run the AppImage, or install the
+  `.deb`/`.rpm` package with your package manager.
 
-Abra a pasta `workflow-mhl/` no Studio para visualizar e editar `inception.mh` e
+Open the `workflow-mhl/` folder in Studio to view and edit `inception.mh` and
 `story.mh`.
 
-## Pré-requisitos e agentes
+## Prerequisites and agents
 
-Validado com **MHL 1.11.1** e Python 3. Python é usado para executar o comando de
-testes no diretório do projeto e pelos testes de integração; a máquina de estados,
-os contratos, as pausas e as decisões estão em MHL.
+Validated with **MHL 1.13.0** and Python 3. Python is used to run the test command
+in the project directory and by the integration tests; the state machine,
+contracts, pauses and decisions are in MHL.
 
-Os agentes padrão chamam diretamente uma CLI compatível com `claude -p PROMPT`.
-Para execução real, ela deve estar instalada, autenticada e configurada com as
-permissões necessárias para o projeto. Podem ser selecionados executáveis distintos:
+The default agents call a CLI compatible with `claude -p PROMPT` directly.
+For real runs, it must be installed, authenticated and configured with the
+permissions the project needs. Separate executables can be selected:
 
 ```sh
 export AGILESPEC_SPEC_CMD=claude
 export AGILESPEC_CODE_CMD=claude
 ```
 
-Para outra interface de CLI, adapte `command`, `args` e, se necessário, `stdin` em
-`lib/agents.mh`, mantendo os contratos JSON descritos nos prompts. Não há credenciais
-no código. O agente de especificação apenas propõe JSON; o MHL valida nomes e conteúdo
-e grava os documentos após aprovação. O agente de implementação edita código e testes.
+For a different CLI interface, adapt `command`, `args` and, if needed, `stdin` in
+`lib/agents.mh`, keeping the JSON contracts described in the prompts. There are no
+credentials in the code. The specification agent only proposes JSON; MHL validates
+names and content and writes the documents after approval. The implementation agent
+edits code and tests.
 
-Cada chamada tem timeout. A implementação não possui retry automático ou cache;
-uma retomada deve examinar o checkout atual. Propostas de especificação têm cache
-de dez minutos, com o diretório do projeto incluído no contexto.
+Every call has a timeout. Implementation has no automatic retry or cache;
+a resume must examine the current checkout. Specification proposals are cached
+for ten minutes, with the project directory included in the context.
 
-## Executar
+## Running
 
-Execute os exemplos abaixo a partir de `workflow-mhl/`. Use um diretório absoluto
-para o projeto e uma sessão própria para cada iniciação/história. Mantenha o mesmo
-diretório de execução, arquivo de entrada e nome de sessão nas retomadas.
-Não execute sessões concorrentes para a mesma história ou para consolidações no
-mesmo projeto.
+Run the examples below from `workflow-mhl/`. Use an absolute path for the project
+and a dedicated session for each inception/story. Keep the same working directory,
+entry file and session name when resuming.
+Do not run concurrent sessions for the same story or for consolidations in the
+same project.
 
-### 1. Iniciação
+### 1. Inception
 
-Se `AgileSpec/project/` já contém os cinco documentos, avance para a história.
-Para um projeto novo, crie seu diretório e informe o contexto e backlog priorizado:
+If `AgileSpec/project/` already contains the five documents, skip to the story.
+For a new project, create its directory and provide the context and prioritized backlog:
 
 ```sh
-export AGILESPEC_PROJECT=/caminho/absoluto/meu-projeto
+export AGILESPEC_PROJECT=/absolute/path/my-project
 mkdir -p "$AGILESPEC_PROJECT"
-mhl run inception.mh --session meu-projeto-inception \
+mhl run inception.mh --session my-project-inception \
   --input "project_dir=$AGILESPEC_PROJECT" \
   --input "brief=$(cat examples/podlite-brief.txt)"
 ```
 
-O workflow pausa em `ApproveInception`. Revise o conteúdo de
-`$AGILESPEC_PROJECT/.agilespec-mhl/inception/project-proposal.json`.
-Depois de aprovar:
+The workflow pauses at `ApproveInception`, waiting for a `bool` decision. Review
+the contents of `$AGILESPEC_PROJECT/.agilespec-mhl/inception/project-proposal.json`.
+To approve:
 
 ```sh
-mhl run inception.mh --session meu-projeto-inception --resume \
-  --input approved=true
+mhl run inception.mh --session my-project-inception --resume --decision true
 ```
 
-Para pedir outra proposta, inicie uma nova sessão com o brief corrigido; uma
-retomada aprova a proposta já guardada no checkpoint. Editar o JSON de revisão não
-edita a proposta armazenada.
+`--decision false` discards the proposal and ends the session. To request a
+different proposal, start a new session with the corrected brief. Editing the
+review JSON does not edit the stored proposal.
 
-### 2. Especificar e implementar uma história
+### 2. Specify and implement a story
 
-Selecione a história do backlog. Use `Draft` para criar/propor specs e `Existing`
-(padrão) para ler specs já preparadas. Ambas as opções exigem aprovação humana.
-O comando de verificação é um array JSON de argumentos e deve executar os testes
-reais do projeto; ajuste-o à sua stack.
+Select the story from the backlog. Use `Draft` to create/propose specs and `Existing`
+(default) to read specs already prepared. Both options require human approval.
+The verification command is a JSON array of arguments and must run the project's
+real tests; adjust it to your stack.
 
 ```sh
-mhl run story.mh --session meu-projeto-story1 \
+mhl run story.mh --session my-project-story1 \
   --input "project_dir=$AGILESPEC_PROJECT" \
   --input story_id=1 \
   --input specification_mode=Draft \
@@ -267,130 +262,134 @@ mhl run story.mh --session meu-projeto-story1 \
   --input 'verify_command=["python3","-m","pytest"]'
 ```
 
-Revise `.agilespec-mhl/story1/specification-1.json`. A proposta ainda não alterou
-as especificações oficiais. Para aprovar e iniciar a implementação:
+Review `.agilespec-mhl/story1/specification-1.json`. The proposal has not yet changed
+the official specifications. Each approval is a **decision** passed on resume
+(`--decision '<json>'`). It is checked against the type the pause waits for before
+any step runs, and answers that pause only: an old decision never approves a new
+round. The pause's output (`--format json`) shows the step and the expected shape in
+`awaiting`. To approve and start implementation:
 
 ```sh
-mhl run story.mh --session meu-projeto-story1 --resume \
-  --input specs_approved_round=1
+mhl run story.mh --session my-project-story1 --resume --decision '{"approved": true}'
 ```
 
-O agente implementa a história, e MHL executa `verify_command` no diretório do
-projeto, registrando saída, erros e código de saída. Em `ReviewImplementation`,
-revise o diff, `implementation-1.json`, `verification-1.json` e a Definition of Done;
-execute os passos de validação manual relatados pelo agente.
+To request another proposal, use `'{"approved": false, "feedback": "..."}'`. The
+specification is drafted again as `specification-2.json` and asks for approval again.
 
-### 3. Aprovar, corrigir ou rejeitar
+The agent implements the story, and MHL runs `verify_command` in the project
+directory, recording output, errors and exit code. At `ReviewImplementation`,
+review the diff, `implementation-1.json`, `verification-1.json` and the Definition
+of Done; carry out the manual validation steps reported by the agent.
 
-Após revisão e validação manual satisfatórias da primeira implementação:
+### 3. Approve, revise or reject
+
+After a satisfactory review and manual validation:
 
 ```sh
-mhl run story.mh --session meu-projeto-story1 --resume \
-  --input review_round=1 --input review_action=Approve
+mhl run story.mh --session my-project-story1 --resume --decision '{"action": "Approve"}'
 ```
 
-Uma implementação bloqueada ou com testes reprovados não pode ser aprovada.
-Para solicitar correção de código:
+A blocked implementation or one with failing tests cannot be approved: the pause
+asks again, saying why. To request a code fix:
 
 ```sh
-mhl run story.mh --session meu-projeto-story1 --resume \
-  --input review_round=1 --input review_action=Revise \
-  --input 'feedback=Corrigir o comportamento com URL inválida.' \
-  --input revise_specs=false
+mhl run story.mh --session my-project-story1 --resume --decision \
+  '{"action": "Revise", "feedback": "Fix the behavior with an invalid URL.", "revise_specs": false}'
 ```
 
-Use `revise_specs=true` se o problema exigir corrigir requisitos ou decisões.
-Nesse caso, o workflow prepara `specification-2.json` e exige
-`specs_approved_round=2` antes de reimplementar. Após a correção, a segunda
-implementação exige `review_round=2`; a aprovação da primeira não é reaproveitada.
-O número da rodada aparece na mensagem da pausa e nos artefatos.
+Use `"revise_specs": true` if the problem requires correcting requirements or
+decisions. The workflow then prepares `specification-2.json` and asks for a new
+spec approval before reimplementing. The new implementation asks for a new review.
 
-`review_action=Reject` encerra a sessão sem concluir a história. O padrão `Pending`
-mantém a pausa. Correções exigem feedback não vazio, e `max_attempts` limita as
-implementações a três por padrão (aceita inteiros de 1 a 20).
+`{"action": "Reject"}` ends the session without completing the story. A revision
+without feedback is refused (the pause asks again), and `max_attempts` limits
+implementations to three by default (accepts integers from 1 to 20).
 
-### 4. Consolidar e concluir
+### 4. Consolidate and complete
 
-A aprovação da implementação gera `consolidation.json`, preservando a história
-desmarcada no backlog. O agente compara código e specs antes de propor:
+Approving the implementation generates `consolidation.json`, keeping the story
+unchecked in the backlog. The agent compares code and specs before proposing:
 
-| Origem | Destino |
+| Source | Destination |
 | --- | --- |
-| `acceptance.md` | Resumo em `backlog.md`, ainda com `[ ]` |
+| `acceptance.md` | Summary in `backlog.md`, still `[ ]` |
 | `design.md` | `architecture.md` |
-| `views.md`, se existente | `ui.md` |
-| `tables.md`, se existente | `database.md` |
+| `views.md`, if present | `ui.md` |
+| `tables.md`, if present | `database.md` |
 
-Discrepâncias ou critérios pendentes impedem a publicação. Revise a proposta e
-confirme todos os critérios da Definition of Done. Para uma história aprovada
-na primeira implementação:
+Discrepancies or pending Definition of Done criteria appear in the pause's message
+and block approval. Review the proposal and confirm every criterion:
 
 ```sh
-mhl run story.mh --session meu-projeto-story1 --resume \
-  --input consolidation_approved_round=1 --input dod_confirmed_round=1
+mhl run story.mh --session my-project-story1 --resume \
+  --decision '{"action": "Approve", "dod_confirmed": true}'
 ```
 
-Use `2` para ambos se a aprovação for da segunda implementação, e assim por diante.
-Essas confirmações também pertencem à rodada. Se a consolidação revelar um problema,
-é possível retomar `DraftConsolidation` ou `ApproveConsolidation` com
-`review_action=Revise`, `review_round` atual, `feedback` e `revise_specs` apropriados.
+If consolidation reveals a problem, answer with `"action": "Revise"` (`feedback`
+and `revise_specs` as in the code review) or `"Reject"`. To only ask for another
+consolidation proposal, redo the phase:
 
-O MHL publica os documentos globais e só depois altera a checkbox da história
-selecionada. Mantém os arquivos da história para rastreabilidade e registra
-`done.json`. Comece outra sessão para selecionar a próxima história, agora com
-as especificações globais consolidadas.
+```sh
+mhl run story.mh --session my-project-story1 --resume --from Consolidation
+```
 
-## Checkpoints e limites
+MHL publishes the global documents and only then changes the checkbox of the
+selected story. It keeps the story files for traceability and records
+`done.json`. Start another session to select the next story, now with the
+consolidated global specifications.
 
-- `--resume` retoma o passo pausado ou que falhou. Inputs omitidos preservam os
-  valores anteriores; envie explicitamente `revise_specs=false` ao voltar a uma
-  correção só de código.
-- Aprovações são decisões humanas sobre as propostas guardadas no checkpoint.
-  Envie-as quando chegar à pausa correspondente.
-- Publicação de documentos e marcação do backlog são idempotentes. A publicação
-  aceita uma escrita parcial da mesma proposta e recusa mudanças concorrentes.
-- Alterações de specs fora da etapa apropriada interrompem o fluxo. Para trocar
-  specs manualmente, faça a alteração e abra uma nova sessão para revisá-las.
-  Uma retomada comum não recarrega arbitrariamente arquivos aprovados.
-- Um agente de implementação pode ser executado novamente se seu passo falhar.
-  Os prompts exigem examinar o estado existente, sem commits, pushes ou deploys.
-  Falhas não desfazem automaticamente alterações feitas pelo subprocesso.
-- Os contratos e verificações de arquivos não substituem o isolamento do processo
-  da CLI. A qualidade da revisão, da cobertura de testes e da confirmação da DoD
-  continua sendo responsabilidade humana, conforme o AgileSpec.
-- Alterar os `.mh` ou os prompts pode invalidar checkpoints. Use uma nova sessão
-  para uma definição alterada. `.mhl/` contém o estado local do runtime e
-  `.mhl-cache/` contém o cache de agentes;
-  `.agilespec-mhl/` contém propostas e evidências para revisão.
+## Checkpoints and limits
 
-## Verificar a implementação
+- `--resume` resumes the paused or failed step. At an approval pause, a resume
+  without `--decision` pauses again; the decision is checked before any step and
+  answers that pause only.
+- `--resume --from <phase>` redoes a whole phase (`Specification`,
+  `Implementation`, `Consolidation`) from its first step, with the variables as of
+  the stop and the pending pause dropped.
+- Document publication and backlog marking are idempotent. Publication accepts a
+  partial write of the same proposal and rejects concurrent changes.
+- Spec changes outside the appropriate step stop the flow. To change specs
+  manually, make the change and open a new session to review them.
+  A regular resume does not arbitrarily reload approved files.
+- An implementation agent may run again if its step fails.
+  The prompts require examining the existing state, with no commits, pushes or deploys.
+  Failures do not automatically undo changes made by the subprocess.
+- File contracts and checks do not replace process isolation of the CLI. The
+  quality of review, test coverage and DoD confirmation remains a human
+  responsibility, as in AgileSpec.
+- Changing the `.mh` files or prompts may invalidate checkpoints. Use a new session
+  for a changed definition. `.mhl/` holds the runtime's local state and
+  `.mhl-cache/` holds the agent cache;
+  `.agilespec-mhl/` holds proposals and evidence for review.
 
-Da raiz deste workspace:
+## Verifying the implementation
+
+From the root of this workspace:
 
 ```sh
 ./workflow-mhl/check.sh
 ```
 
-Esse comando faz lint, executa os testes MHL com um agente local simulado,
-valida os dois contratos de entrada com `--dry-run` e exercita checkpoints reais
-com `--resume` em um projeto temporário. Os dados de teste e caches são criados
-em diretórios temporários e removidos ao terminar. Não usa modelos, rede ou credenciais.
-Os testes MHL recusam agentes de produção se chamados sem a configuração offline.
+This command lints, runs the MHL tests with a simulated local agent, validates
+both entry contracts with `--dry-run` and exercises real checkpoints with
+`--resume` in a temporary project. Test data and caches are created in temporary
+directories and removed at the end. It uses no models, network or credentials.
+The MHL tests refuse production agents if called without the offline configuration.
 
-Os testes cobrem aprovações, rejeição, falhas de testes, implementação bloqueada,
-feedback, limite de correções, revisão de specs, documentos opcionais, discrepâncias,
-DoD pendente, alterações concorrentes, publicação parcial e marcação precisa do backlog.
-As execuções reais com uma CLI de modelo dependem da configuração local dessa CLI.
+The tests cover approvals, rejection, test failures, blocked implementation,
+feedback, the revision limit, spec revision, optional documents, discrepancies,
+pending DoD, concurrent changes, partial publication and precise backlog marking.
+Real runs with a model CLI depend on that CLI's local configuration.
 
-## Fontes e licença
+## Sources and license
 
-Derivado do [README](../AgileSpec/README.md), [FAQ](../AgileSpec/faq.md) e prompts de
-[implementação](../AgileSpec/prompts/implementation.md) e
-[consolidação](../AgileSpec/prompts/consolidation.md) do AgileSpec.
-Sintaxe e práticas baseadas nas skills locais de
-[linguagem](../mhl-skills/mhl-language/SKILL.md),
+Derived from the AgileSpec [README](../AgileSpec/README.md), [FAQ](../AgileSpec/faq.md) and
+[implementation](../AgileSpec/prompts/implementation.md) and
+[consolidation](../AgileSpec/prompts/consolidation.md) prompts.
+Syntax and practices based on the local skills for
+[language](../mhl-skills/mhl-language/SKILL.md),
 [workflows](../mhl-skills/mhl-workflows/SKILL.md),
-[agentes](../mhl-skills/mhl-agents/SKILL.md),
-[ferramentas](../mhl-skills/mhl-tools/SKILL.md) e
-[testes](../mhl-skills/mhl-testing/SKILL.md).
-O aviso MIT do AgileSpec está preservado em [LICENSE](LICENSE).
+[agents](../mhl-skills/mhl-agents/SKILL.md),
+[tools](../mhl-skills/mhl-tools/SKILL.md) and
+[testing](../mhl-skills/mhl-testing/SKILL.md).
+The AgileSpec MIT notice is preserved in [LICENSE](LICENSE).

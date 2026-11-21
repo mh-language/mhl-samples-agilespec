@@ -25,9 +25,9 @@ test inception_lifecycle {
         var result = AgileSpecInception.run(
             inputs: {
                 project_dir: root,
-                brief: "A feature and a prioritized backlog",
-                approved: true
-            }
+                brief: "A feature and a prioritized backlog"
+            },
+            decisions: [true]
         )
 
         are_equal(result.state, "completed")
@@ -36,12 +36,34 @@ test inception_lifecycle {
             [
                 "ReadContext",
                 "DraftInception",
+                // The gate pauses, then the resume with the decision re-enters it.
+                "ApproveInception",
                 "ApproveInception",
                 "PublishProjectSpecs",
                 "Done"
             ]
         )
         is_true(fs.read(fs.join(root, "AgileSpec", "project", "architecture.md")).contains("Keep modules"))
+    }
+
+    describe initial_proposal_waits_for_a_bool_decision {
+        var root = Fixtures.project()
+
+        var result = AgileSpecInception.run(inputs: {project_dir: root, brief: "A backlog"})
+
+        are_equal(result.awaiting.step, "ApproveInception")
+        are_equal(result.awaiting.type, "bool")
+    }
+
+    describe a_discarded_inception_publishes_nothing {
+        var root = Fixtures.project()
+        var path = fs.join(root, "AgileSpec", "project", "architecture.md")
+        var original = fs.read(path)
+
+        var result = AgileSpecInception.run(inputs: {project_dir: root, brief: "A backlog"}, decisions: [false])
+
+        are_equal(result.state, "broke")
+        are_equal(fs.read(path), original)
     }
 
     describe empty_brief_fails_before_agent_call {

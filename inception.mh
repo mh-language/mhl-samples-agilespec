@@ -7,7 +7,6 @@ export workflow AgileSpecInception {
 
     input project_dir: string
     input brief: string
-    input approved: bool = false
 
     var project_folder = ""
     var review_folder = ""
@@ -48,11 +47,14 @@ export workflow AgileSpecInception {
     }
 
     step ApproveInception {
+        var approved = pause(
+            "Revise ${review_folder}/project-proposal.json. " +
+            "Retome com --decision true para aprovar a iniciação, ou false para descartá-la.",
+            decision: bool
+        )
+
         if (!approved) {
-            pause(
-                "Revise ${review_folder}/project-proposal.json. " +
-                "Retome com approved=true para aprovar a iniciação."
-            )
+            break "Inception discarded: start a new session with a corrected brief"
         }
     }
 

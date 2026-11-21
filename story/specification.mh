@@ -1,9 +1,23 @@
 import {SpecAuthor} from "../lib/agents.mh"
 import {SpecificationPrompt} from "../lib/prompts.mh"
-import {Specs} from "../lib/contracts.mh"
+import {Specs, SpecificationMode, SpecReview} from "../lib/contracts.mh"
 
 // Fase 1: proposta, aprovação humana e publicação das specs da história.
-partial workflow AgileSpecStory stage specification {
+// Quem chega de fora entra pelo nome da fase (`goto Specification`), e a fase
+// decide por onde começa: BeginSpecification despacha.
+partial workflow AgileSpecStory stage Specification {
+    step BeginSpecification {
+        // Specs já preparadas, só na primeira rodada: carregar e ir à aprovação.
+        // Uma revisão de specs (spec_round > 1) sempre redige uma nova proposta.
+        if (specification_mode == SpecificationMode.Existing && spec_round == 1) {
+            self.story = Specs.story(story_folder, ui_changes, database_changes)
+
+            Specs.artifact(review_folder, "specification-1.json", {files: story})
+
+            goto ApproveSpecification
+        }
+    }
+
     step DraftSpecification timeout 12m {
         var required = Specs.story_names(
             ui_changes || !story_before.get("views.md", "").is_empty(),
@@ -32,11 +46,28 @@ partial workflow AgileSpecStory stage specification {
     }
 
     step ApproveSpecification {
-        if (specs_approved_round != spec_round) {
-            pause(
-                "Revise ${review_folder}/specification-${spec_round}.json. " +
-                "Retome com specs_approved_round=${spec_round}."
-            )
+        var d = pause(
+            "${review_notice}Revise ${review_folder}/specification-${spec_round}.json. " +
+            "Retome com --decision '{\"approved\": true}', ou com " +
+            "'{\"approved\": false, \"feedback\": \"...\"}' para pedir outra proposta.",
+            decision: SpecReview
+        )
+
+        self.review_notice = ""
+
+        if (!d.approved) {
+            var note = d.get("feedback", "")
+
+            if (note.trim().is_empty()) {
+                self.review_notice = "Para pedir outra proposta, informe feedback. "
+
+                goto ApproveSpecification
+            }
+
+            self.feedback = note
+            self.spec_round = spec_round + 1
+
+            goto DraftSpecification
         }
     }
 
@@ -45,6 +76,6 @@ partial workflow AgileSpecStory stage specification {
 
         Specs.apply(story_folder, story_before, story)
 
-        goto StartAttempt
+        goto Implementation
     }
 }

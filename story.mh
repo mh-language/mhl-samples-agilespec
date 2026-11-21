@@ -1,4 +1,4 @@
-import {Specs, ReviewAction, SpecificationMode} from "lib/contracts.mh"
+import {Specs, SpecificationMode} from "lib/contracts.mh"
 
 import "story/specification.mh"
 import "story/implementation.mh"
@@ -14,15 +14,6 @@ export partial workflow AgileSpecStory {
     input specification_mode: SpecificationMode = SpecificationMode.Existing
     input ui_changes: bool = false
     input database_changes: bool = false
-    input specs_approved_round: number = 0
-
-    input review_action: ReviewAction = ReviewAction.Pending
-    input review_round: number = 0
-    input feedback: string = ""
-    input revise_specs: bool = false
-
-    input consolidation_approved_round: number = 0
-    input dod_confirmed_round: number = 0
 
     input max_attempts: number = 3
 
@@ -39,10 +30,12 @@ export partial workflow AgileSpecStory {
 
     var implementation = {}
     var verification = {}
-    var consolidated = {}
 
-    var completion_before = {}
-    var completion_after = {}
+    // Set from the human gates' decisions (`pause(..., decision: T)`).
+    var feedback = ""
+    var revise_specs = false
+    // Why a gate asks again: a decision it could not accept, shown in its message.
+    var review_notice = ""
 
     var status = "in_progress"
 
@@ -84,14 +77,36 @@ export partial workflow AgileSpecStory {
             false
         )
 
-        if (specification_mode == SpecificationMode.Draft) {
-            goto DraftSpecification
+        goto Specification
+    }
+
+    // Os dois passos abaixo valem para a história inteira, não para uma fase:
+    // ficam fora de qualquer stage, e as fases chegam a eles pelo nome.
+
+    // Uma revisão (pedida na implementação ou na consolidação) volta à fase
+    // certa: especificação, se as specs mudam, senão implementação.
+    step PrepareRevision {
+        if (feedback.trim().is_empty()) {
+            fail("Revision requires human feedback")
         }
 
-        self.story = Specs.story(story_folder, ui_changes, database_changes)
+        if (attempt >= max_attempts) {
+            fail("Revision limit reached (${max_attempts}); start a new session after reviewing scope")
+        }
 
-        Specs.artifact(review_folder, "specification-1.json", {files: story})
+        if (revise_specs) {
+            self.spec_round = spec_round + 1
+            self.story_before = story
 
-        goto ApproveSpecification
+            goto Specification
+        }
+
+        goto Implementation
+    }
+
+    step Rejected {
+        self.status = "rejected"
+
+        break "Story ${story_id} rejected by human review; backlog remains pending"
     }
 }

@@ -48,16 +48,22 @@ export tool Fixtures {
         "from pathlib import Path; assert Path('src/feature.txt').read_text().strip() == 'implemented'"
     ]
 
-    approved(root: string): any -> {
+    // The inputs a story run takes; the human gates answer through decisions.
+    inputs(root: string): any -> {
         project_dir: root,
         story_id: "1",
-        verify_command: self.command(),
-        specs_approved_round: 1,
-        review_action: "Approve",
-        review_round: 1,
-        consolidation_approved_round: 1,
-        dod_confirmed_round: 1
+        verify_command: self.command()
     }
+
+    // Decisions for Name.run(decisions: [...]), one per gate, in order.
+    approve_spec(): any -> {approved: true}
+
+    approve_code(): any -> {action: "Approve"}
+
+    approve_consolidation(): any -> {action: "Approve", dod_confirmed: true}
+
+    // Every gate approved: specification, implementation, consolidation.
+    approve_all(): any[] -> [self.approve_spec(), self.approve_code(), self.approve_consolidation()]
 
     mode(root: string, mode: string): bool -> fs.write(fs.join(root, ".mock-mode"), mode)
 }
