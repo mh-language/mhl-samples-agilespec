@@ -66,6 +66,17 @@ test inception_lifecycle {
         are_equal(fs.read(path), original)
     }
 
+    describe brief_may_name_the_file_holding_it {
+        var root = Fixtures.project()
+        var file = fs.join(root, "brief.txt")
+        fs.write(file, "Backlog from a file")
+
+        var result = AgileSpecInception.run(inputs: {project_dir: root, brief: file})
+
+        are_equal(result.state, "paused")
+        are_equal(result.vars.brief_text, "Backlog from a file")
+    }
+
     describe empty_brief_fails_before_agent_call {
         var root = Fixtures.project()
 

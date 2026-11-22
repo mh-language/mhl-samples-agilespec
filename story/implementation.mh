@@ -6,54 +6,69 @@ import {Specs, Verification, ReviewAction, CodeReview} from "../lib/contracts.mh
 // A revisão encaminha para PrepareRevision ou Rejected, no fragmento de
 // entrada (story.mh): eles valem para a história inteira, não para esta fase.
 partial workflow AgileSpecStory stage Implementation {
+    // O comando de testes é desta fase: sem ele, o run pausa ao entrar aqui,
+    // já com as specs aprovadas e publicadas, e espera só por este input:
+    // `mhl run story.mh --session ... --resume --input 'verify_command=[...]'`.
+    // Passado ao iniciar o run, a fase não pausa.
+    
+    /// verify_command: the command to run for verification, which must be a non-empty array of strings —
+    /// the command and its arguments as a JSON list, e.g. ["python3", "-m", "pytest"].
+    input verify_command: string[]
+
     step StartAttempt {
-        self.attempt = attempt + 1
+        if (verify_command.is_empty()) {
+            fail("verify_command is required")
+        }
+
+        base.attempt = base.attempt + 1
     }
 
     step Implement timeout 35m {
-        Specs.same(project_folder, project)
-        Specs.same(story_folder, story)
+        Specs.same(base.project_folder, base.project)
+        Specs.same(base.story_folder, base.story)
 
         var data = json.stringify({
-            project_dir,
-            story_id,
-            project,
-            story,
-            attempt,
-            feedback,
+            base.project_dir,
+            base.story_id,
+            base.project,
+            base.story,
+            base.attempt,
+            base.feedback,
             verify_command
         })
 
-        var raw = StoryImplementer.run(repo: project_dir, prompt: ImplementationPrompt(data: data))
+        var raw = StoryImplementer.run(repo: base.project_dir, prompt: ImplementationPrompt(data: data))
 
-        self.implementation = Specs.report(raw)
+        base.implementation = Specs.report(raw)
 
-        Specs.same(project_folder, project)
-        Specs.same(story_folder, story)
+        Specs.same(base.project_folder, base.project)
+        Specs.same(base.story_folder, base.story)
 
-        Specs.artifact(review_folder, "implementation-${attempt}.json", implementation)
+        Specs.artifact(base.review_folder, "implementation-${base.attempt}.json", base.implementation)
     }
 
     step Verify timeout 12m {
-        self.verification = Verification.execute(project_dir, verify_command)
+        base.verification = Verification.execute(base.project_dir, verify_command)
 
-        Specs.same(project_folder, project)
-        Specs.same(story_folder, story)
+        Specs.same(base.project_folder, base.project)
+        Specs.same(base.story_folder, base.story)
 
-        Specs.artifact(review_folder, "verification-${attempt}.json", verification)
+        Specs.artifact(base.review_folder, "verification-${base.attempt}.json", base.verification)
     }
 
     step ReviewImplementation {
+        /// d: Approve segue para a consolidação; Revise pede outra tentativa com o
+        /// feedback (revise_specs volta à especificação); Reject encerra a história.
         var d = pause(
-            "${review_notice}Revise código, implementation-${attempt}.json e " +
-            "verification-${attempt}.json em ${review_folder}. Valide manualmente. " +
+            "${base.review_notice}Revise código, implementation-${base.attempt}.json e " +
+            "verification-${base.attempt}.json em ${base.review_folder}. Valide manualmente. " +
             "Retome com --decision: '{\"action\": \"Approve\"}', " +
             "'{\"action\": \"Revise\", \"feedback\": \"...\", \"revise_specs\": false}' " +
             "ou '{\"action\": \"Reject\"}'.",
             decision: CodeReview
         )
 
-        self.review_notice = ""
+        base.review_notice = ""
 
         if (d.action == ReviewAction.Reject) {
             goto Rejected
@@ -63,26 +78,26 @@ partial workflow AgileSpecStory stage Implementation {
             var note = d.get("feedback", "")
 
             if (note.trim().is_empty()) {
-                self.review_notice = "Uma revisão exige feedback. "
+                base.review_notice = "Uma revisão exige feedback. "
 
                 goto ReviewImplementation
             }
 
-            self.feedback = note
-            self.revise_specs = d.get("revise_specs", false)
+            base.feedback = note
+            base.revise_specs = d.get("revise_specs", false)
 
             goto PrepareRevision
         }
 
         // An approval this attempt cannot take asks again, saying why.
-        if (!verification.passed) {
-            self.review_notice = "Não é possível aprovar: os testes automatizados falharam; peça uma revisão. "
+        if (!base.verification.passed) {
+            base.review_notice = "Não é possível aprovar: os testes automatizados falharam; peça uma revisão. "
 
             goto ReviewImplementation
         }
 
-        if (implementation.status != "ready") {
-            self.review_notice = "Não é possível aprovar: a implementação está bloqueada; peça uma revisão com esclarecimento. "
+        if (base.implementation.status != "ready") {
+            base.review_notice = "Não é possível aprovar: a implementação está bloqueada; peça uma revisão com esclarecimento. "
 
             goto ReviewImplementation
         }

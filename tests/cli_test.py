@@ -50,16 +50,36 @@ with tempfile.TemporaryDirectory(prefix="agilespec-cli-") as tmp:
     assert sessions(project)["inception"]["status"] == "done"
     assert "1. [ ]" in backlog(project)
 
-    # The first story needs the project's test command; it is kept for the next ones.
-    assert "--verify" in cli(project, "story", "1", "--draft", fails=True)
-    out = cli(project, "story", "1", "--draft", "--verify", "python3 -c pass")
+    # The test command is the Implementation stage's input: the first story
+    # starts without it, and the run asks for it on entering Implementation.
+    out = cli(project, "story", "1", "--draft")
     assert "Aprovar a especificação" in out, out
     assert sessions(project)["story-1"]["status"] == "paused"
     assert "em andamento" in cli(project, "story", "1", fails=True)
 
     # Guided: ask for another spec (an empty feedback is asked again), approve
-    # it, ask for a code fix, then leave the session paused.
-    out = cli(project, "next", stdin="2\n\nMais casos de borda\n1\n2\nCorrigir a borda\nn\nq\n")
+    # it; the run then asks for the test command — leave it paused there.
+    out = cli(project, "next", stdin="2\n\nMais casos de borda\n1\nq\n")
+    assert "Informar os inputs da fase Implementation" in out and "Comando de testes" in out, out
+    assert "continua pausada" in out, out
+    state = last(project, "story-1")
+    assert state["awaiting_inputs"]["inputs"] == ["verify_command"], state
+    assert state["vars"]["spec_round"] == 2 and state["vars"]["attempt"] == 0, state["vars"]
+    assert "aguardando inputs: Implementation (verify_command)" in cli(project, "status")
+
+    # A decision does not answer it; giving nothing, with no default, is refused.
+    assert "agilespec input" in cli(project, "approve", fails=True)
+    assert "Falta informar verify_command" in cli(project, "input", fails=True)
+    assert "não pede" in cli(project, "input", "story_id=3", fails=True)
+
+    # Scripted: only that input is sent, and the project remembers it.
+    out = cli(project, "input", "verify_command=python3 -c pass")
+    assert "Revisar a implementação" in out, out
+    assert "Testes: python3 -c pass" in cli(project, "status")
+    assert sessions(project)["story-1"]["inputs"]["verify_command"] == ["python3", "-c", "pass"]
+
+    # Guided again: ask for a code fix, then leave the session paused.
+    out = cli(project, "next", stdin="2\nCorrigir a borda\nn\nq\n")
     assert "continua pausada" in out, out
     state = last(project, "story-1")
     assert state["awaiting"]["step"] == "ReviewImplementation", state["awaiting"]
@@ -78,8 +98,10 @@ with tempfile.TemporaryDirectory(prefix="agilespec-cli-") as tmp:
     assert sessions(project)["story-1"]["status"] == "done"
     assert "1. [x]" in backlog(project) and "2. [ ]" in backlog(project)
 
-    # A spec round cannot be rejected; a reviewed implementation can.
+    # A spec round cannot be rejected; a reviewed implementation can. The
+    # remembered test command goes up front: nothing waits for it.
     cli(project, "story", "2", "--draft")
+    assert sessions(project)["story-2"]["inputs"]["verify_command"] == ["python3", "-c", "pass"]
     assert "não aceita rejeição" in cli(project, "reject", fails=True)
     cli(project, "approve")
     out = cli(project, "next", stdin="3\ns\n")
@@ -98,4 +120,4 @@ with tempfile.TemporaryDirectory(prefix="agilespec-cli-") as tmp:
     assert sessions(project)["story-9"]["status"] == "failed"
     assert "-s <sessão>" in cli(project, "next", fails=True)
 
-print("CLI: inception, guided and scripted decisions, refused decisions, DoD confirmation, rejection and failures passed.")
+print("CLI: inception, guided and scripted decisions and stage inputs, refused decisions, DoD confirmation, rejection and failures passed.")

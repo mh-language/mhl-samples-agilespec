@@ -188,6 +188,11 @@ On first launch:
 Open this repository's folder in Studio to view and edit `inception.mh` and
 `story.mh`.
 
+In the Run form, `project_dir` is an absolute path (no `~`). `brief` takes the text itself,
+or the path of a file that holds it, such as `examples/podlite-brief.txt`. If an agent's
+answer is invalid, **Run fresh** starts over and calls the agent again instead of reusing
+the cached reply (`mhl run --no-cache`).
+
 ## Prerequisites and agents
 
 Validated with **MHL 1.13.0** and Python 3. Python is used to run the test command
@@ -232,13 +237,22 @@ agilespec next
 ```
 
 In a terminal, `inception` and `story` ask each decision right away. At `q` (or
-Ctrl-D), the session stays paused; `agilespec next` resumes it. The project is
+Ctrl-D), the session stays paused; `agilespec next` resumes it.
+
+The test command belongs to the Implementation stage. When it is known — given with
+`--verify`, or remembered from an earlier story — the CLI passes it at the start and
+nothing waits for it. Otherwise the story starts without it, and the run stops on
+entering Implementation, once the specs are approved and published. `next` then asks
+for it (Enter takes the project's default), and `agilespec input
+verify_command="..."` gives it without questions. Only that input is sent on the
+resume, and the project remembers it for the next stories. The project is
 `--project`, else `$AGILESPEC_PROJECT`, else the current folder.
 
 | Command | What it does |
 | --- | --- |
 | `inception --brief FILE` | Proposes the global specs from the brief (a file, the text, or `-`) |
-| `story ID [--draft] [--ui] [--db] [--verify CMD]` | Specifies, implements and consolidates story `ID`; the test command is kept for the next ones |
+| `story ID [--draft] [--ui] [--db] [--verify CMD]` | Specifies, implements and consolidates story `ID`; the test command is kept for the next ones, and without one the run asks for it on entering Implementation |
+| `input KEY=VALUE ...` | Gives the inputs a stage asks for on entering it (`verify_command="python3 -m pytest"`); a key left out takes the project's default |
 | `next` | Shows the pending pause, asks for the decision and goes on; after a failure, offers to run the step again |
 | `status` / `show` | Lists the sessions / shows the last pause or outcome again |
 | `approve [--dod]` · `revise "feedback" [--specs]` · `reject` | Decide without questions, for scripts; approving the consolidation needs `--dod` |
@@ -293,6 +307,22 @@ Select the story from the backlog. Use `Draft` to create/propose specs and `Exis
 (default) to read specs already prepared. Both options require human approval.
 The verification command is a JSON array of arguments and must run the project's
 real tests; adjust it to your stack.
+
+Each phase declares its own inputs. `project_dir`, `story_id` and `max_attempts` belong
+to the whole story. `specification_mode`, `ui_changes` and `database_changes` belong to
+the Specification stage, and all have defaults. `verify_command` belongs to the
+Implementation stage. Every input can be given up front, as below. If you leave
+`verify_command` out, the run pauses on entering Implementation, after the specs are
+approved and published. Its output then lists `awaiting_inputs`, and you resume with
+only that input:
+
+```sh
+mhl run story.mh --session my-project-story1 --resume \
+  --input 'verify_command=["python3","-m","pytest"]'
+```
+
+A resume still missing it is refused, and the run stays paused. This needs an mhl with
+stage inputs; an older one requires every input at the start.
 
 ```sh
 mhl run story.mh --session my-project-story1 \

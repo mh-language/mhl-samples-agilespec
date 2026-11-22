@@ -10,6 +10,18 @@ test contracts {
         are_equal(Specs.finish(done, "1"), done)
     }
 
+    describe reads_agent_json_with_or_without_a_markdown_fence {
+        var bare = "{\"files\":{\"a.md\":\"x\"}}"
+
+        are_equal(Specs.json_of(bare).files["a.md"], "x")
+        are_equal(Specs.json_of("```json\n${bare}\n```\n").files["a.md"], "x")
+        are_equal(Specs.json_of("```\n${bare}\n```").files["a.md"], "x")
+        are_equal(Specs.json_of("Aqui está:\n```json\n${bare}\n```\nNenhum arquivo foi alterado.").files["a.md"], "x")
+        // A fence inside a document is escaped in the JSON string, never a line of its own.
+        var code = "{\"files\":{\"a.md\":\"```sh\\nls\\n```\"}}"
+        are_equal(Specs.json_of("```json\n${code}\n```").files["a.md"], "```sh\nls\n```")
+    }
+
     describe rejects_path_traversal_in_story_id {
         var message = ""
 

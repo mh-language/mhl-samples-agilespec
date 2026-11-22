@@ -6,13 +6,24 @@ import {Specs, SpecificationMode, SpecReview} from "../lib/contracts.mh"
 // Quem chega de fora entra pelo nome da fase (`goto Specification`), e a fase
 // decide por onde começa: BeginSpecification despacha.
 partial workflow AgileSpecStory stage Specification {
+    // Inputs desta fase. Todos têm default, então a fase nunca pausa por
+    // eles: passe-os ao iniciar o run para mudar o modo ou declarar mudanças.
+
+    /// specification_mode: Existing reuses the story's specs already in AgileSpec/stories on the
+    /// first round; Draft has the agent write new ones. Defaults to Existing.
+    input specification_mode: SpecificationMode = SpecificationMode.Existing
+    /// ui_changes: whether the story requires changes to the user interface, which must be a boolean. Defaults to false.
+    input ui_changes: bool = false
+    /// database_changes: whether the story requires changes to the database, which must be a boolean. Defaults to false.
+    input database_changes: bool = false
+
     step BeginSpecification {
         // Specs já preparadas, só na primeira rodada: carregar e ir à aprovação.
         // Uma revisão de specs (spec_round > 1) sempre redige uma nova proposta.
-        if (specification_mode == SpecificationMode.Existing && spec_round == 1) {
-            self.story = Specs.story(story_folder, ui_changes, database_changes)
+        if (specification_mode == SpecificationMode.Existing && base.spec_round == 1) {
+            base.story = Specs.story(base.story_folder, ui_changes, database_changes)
 
-            Specs.artifact(review_folder, "specification-1.json", {files: story})
+            Specs.artifact(base.review_folder, "specification-1.json", {files: base.story})
 
             goto ApproveSpecification
         }
@@ -20,61 +31,63 @@ partial workflow AgileSpecStory stage Specification {
 
     step DraftSpecification timeout 12m {
         var required = Specs.story_names(
-            ui_changes || !story_before.get("views.md", "").is_empty(),
-            database_changes || !story_before.get("tables.md", "").is_empty()
+            ui_changes || !base.story_before.get("views.md", "").is_empty(),
+            database_changes || !base.story_before.get("tables.md", "").is_empty()
         )
         var data = json.stringify({
-            project_dir,
-            story_id,
-            project,
-            existing_story: story_before,
+            base.project_dir,
+            base.story_id,
+            base.project,
+            existing_story: base.story_before,
             ui_changes,
             database_changes,
-            feedback,
-            spec_round
+            base.feedback,
+            base.spec_round
         })
 
-        var raw = SpecAuthor.run(repo: project_dir, prompt: SpecificationPrompt(data: data))
+        var raw = SpecAuthor.run(repo: base.project_dir, prompt: SpecificationPrompt(data: data))
 
-        self.story = Specs.documents(raw, required, required)
-        Specs.acceptance(story["acceptance.md"])
+        base.story = Specs.documents(raw, required, required)
+        Specs.acceptance(base.story["acceptance.md"])
 
-        Specs.same(project_folder, project)
-        Specs.same(story_folder, story_before)
+        Specs.same(base.project_folder, base.project)
+        Specs.same(base.story_folder, base.story_before)
 
-        Specs.artifact(review_folder, "specification-${spec_round}.json", {files: story})
+        Specs.artifact(base.review_folder, "specification-${base.spec_round}.json", {files: base.story})
     }
 
     step ApproveSpecification {
+        /// d: aprove para publicar as specs da história e seguir para a implementação;
+        /// sem aprovação, o feedback orienta uma nova proposta.
         var d = pause(
-            "${review_notice}Revise ${review_folder}/specification-${spec_round}.json. " +
+            "${base.review_notice}Revise ${base.review_folder}/specification-${base.spec_round}.json. " +
             "Retome com --decision '{\"approved\": true}', ou com " +
             "'{\"approved\": false, \"feedback\": \"...\"}' para pedir outra proposta.",
             decision: SpecReview
         )
 
-        self.review_notice = ""
+        base.review_notice = ""
 
         if (!d.approved) {
             var note = d.get("feedback", "")
 
             if (note.trim().is_empty()) {
-                self.review_notice = "Para pedir outra proposta, informe feedback. "
+                base.review_notice = "Para pedir outra proposta, informe feedback. "
 
                 goto ApproveSpecification
             }
 
-            self.feedback = note
-            self.spec_round = spec_round + 1
+            base.feedback = note
+            base.spec_round = base.spec_round + 1
 
             goto DraftSpecification
         }
     }
 
     step PublishStorySpecs {
-        Specs.same(project_folder, project)
+        Specs.same(base.project_folder, base.project)
 
-        Specs.apply(story_folder, story_before, story)
+        Specs.apply(base.story_folder, base.story_before, base.story)
 
         goto Implementation
     }

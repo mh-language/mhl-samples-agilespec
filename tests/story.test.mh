@@ -72,6 +72,39 @@ test story_lifecycle {
         is_true(result.error.contains("views.md"))
     }
 
+    describe implementation_asks_for_its_test_command_on_entry {
+        var root = Fixtures.project()
+
+        // Só os inputs da história: o comando de testes é da fase Implementation.
+        var result = AgileSpecStory.run(
+            inputs: {project_dir: root, story_id: "1"},
+            decisions: [Fixtures.approve_spec()]
+        )
+
+        are_equal(result.state, "paused")
+        are_equal(result.awaiting_inputs.stage, "Implementation")
+        are_equal(result.awaiting_inputs.step, "StartAttempt")
+        are_equal(result.awaiting_inputs.inputs, ["verify_command"])
+        // As specs já foram aprovadas e publicadas; nada foi implementado.
+        are_equal(result.executed[result.executed.size() - 1], "PublishStorySpecs")
+        is_true(fs.exists(fs.join(root, "AgileSpec", "stories", "story1", "acceptance.md")))
+        is_false(fs.exists(fs.join(root, "src")))
+        are_equal(result.vars.attempt, 0)
+    }
+
+    describe an_empty_test_command_fails_the_implementation_stage {
+        var root = Fixtures.project()
+
+        var result = AgileSpecStory.run(
+            inputs: Fixtures.inputs(root) with {verify_command: []},
+            decisions: [Fixtures.approve_spec()]
+        )
+
+        are_equal(result.state, "failed")
+        are_equal(result.step, "StartAttempt")
+        is_true(result.error.contains("verify_command is required"))
+    }
+
     describe implementation_waits_for_manual_review {
         var root = Fixtures.project()
 

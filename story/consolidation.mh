@@ -9,35 +9,34 @@ partial workflow AgileSpecStory stage Consolidation {
     // Estado desta fase apenas.
     var consolidated = {}
     var consolidation_problems = []
-
     var completion_before = {}
     var completion_after = {}
 
     step DraftConsolidation timeout 12m {
-        Specs.same(project_folder, project)
-        Specs.same(story_folder, story)
+        Specs.same(base.project_folder, base.project)
+        Specs.same(base.story_folder, base.story)
 
         var data = json.stringify({
-            project_dir,
-            story_id,
-            project,
-            story,
-            implementation,
-            verification
+            base.project_dir,
+            base.story_id,
+            base.project,
+            base.story,
+            base.implementation,
+            base.verification
         })
 
-        var raw = SpecAuthor.run(repo: project_dir, prompt: ConsolidationPrompt(data: data))
+        var raw = SpecAuthor.run(repo: base.project_dir, prompt: ConsolidationPrompt(data: data))
 
-        var proposal = Specs.consolidation(raw, project, story, story_id)
+        var proposal = Specs.consolidation(raw, base.project, base.story, base.story_id)
 
         self.consolidated = proposal.files
         self.consolidation_problems = proposal.problems
 
-        Specs.same(project_folder, project)
-        Specs.same(story_folder, story)
+        Specs.same(base.project_folder, base.project)
+        Specs.same(base.story_folder, base.story)
 
-        Specs.artifact(review_folder, "consolidation.json", {
-            before: project,
+        Specs.artifact(base.review_folder, "consolidation.json", {
+            before: base.project,
             files: consolidated,
             problems: consolidation_problems
         })
@@ -51,8 +50,10 @@ partial workflow AgileSpecStory stage Consolidation {
                 "Peça uma revisão, rejeite, ou refaça a consolidação com --from Consolidation. "
         }
 
+        /// d: Approve conclui a história, só com dod_confirmed depois de atender a
+        /// Definition of Done; Revise volta com o feedback; Reject encerra a história.
         var d = pause(
-            "${review_notice}${problems}Revise ${review_folder}/consolidation.json e a Definition of Done. " +
+            "${base.review_notice}${problems}Revise ${base.review_folder}/consolidation.json e a Definition of Done. " +
             "Retome com --decision: '{\"action\": \"Approve\", \"dod_confirmed\": true}' " +
             "somente após atender todos os critérios, " +
             "'{\"action\": \"Revise\", \"feedback\": \"...\", \"revise_specs\": false}' " +
@@ -60,7 +61,7 @@ partial workflow AgileSpecStory stage Consolidation {
             decision: ConsolidationReview
         )
 
-        self.review_notice = ""
+        base.review_notice = ""
 
         if (d.action == ReviewAction.Reject) {
             goto Rejected
@@ -70,54 +71,54 @@ partial workflow AgileSpecStory stage Consolidation {
             var note = d.get("feedback", "")
 
             if (note.trim().is_empty()) {
-                self.review_notice = "Uma revisão exige feedback. "
+                base.review_notice = "Uma revisão exige feedback. "
 
                 goto ApproveConsolidation
             }
 
-            self.feedback = note
-            self.revise_specs = d.get("revise_specs", false)
+            base.feedback = note
+            base.revise_specs = d.get("revise_specs", false)
 
             goto PrepareRevision
         }
 
         // An approval the consolidation cannot take asks again, saying why.
         if (!consolidation_problems.is_empty()) {
-            self.review_notice = "Não é possível aprovar uma consolidação com problemas. "
+            base.review_notice = "Não é possível aprovar uma consolidação com problemas. "
 
             goto ApproveConsolidation
         }
 
         if (!d.get("dod_confirmed", false)) {
-            self.review_notice = "Confirme todos os critérios da Definition of Done (dod_confirmed: true). "
+            base.review_notice = "Confirme todos os critérios da Definition of Done (dod_confirmed: true). "
 
             goto ApproveConsolidation
         }
     }
 
     step PublishConsolidation {
-        Specs.same(story_folder, story)
+        Specs.same(base.story_folder, base.story)
 
-        Specs.apply(project_folder, project, consolidated)
+        Specs.apply(base.project_folder, base.project, consolidated)
 
         self.completion_before = {"backlog.md": consolidated["backlog.md"]}
-        self.completion_after = {"backlog.md": Specs.finish(consolidated["backlog.md"], story_id)}
+        self.completion_after = {"backlog.md": Specs.finish(consolidated["backlog.md"], base.story_id)}
     }
 
     step MarkDone {
-        Specs.apply(project_folder, completion_before, completion_after)
+        Specs.apply(base.project_folder, completion_before, completion_after)
 
-        Specs.artifact(review_folder, "done.json", {
-            story_id,
-            attempt,
-            spec_round,
-            verification,
+        Specs.artifact(base.review_folder, "done.json", {
+            base.story_id,
+            base.attempt,
+            base.spec_round,
+            base.verification,
             manual_validation_approved: true,
             consolidation_approved: true,
             dod_confirmed: true
         })
 
-        self.status = "done"
+        base.status = "done"
 
         goto Done
     }

@@ -189,6 +189,11 @@ Na primeira execução:
 Abra a pasta deste repositório no Studio para visualizar e editar `inception.mh` e
 `story.mh`.
 
+No formulário do Run, `project_dir` é um caminho absoluto, sem `~`. Já `brief` aceita o
+texto ou o caminho de um arquivo, como `examples/podlite-brief.txt`. Se um agente
+responder algo inválido, **Run fresh** recomeça do zero chamando o agente de novo, em vez
+de reaproveitar a resposta em cache (`mhl run --no-cache`).
+
 ## Pré-requisitos e agentes
 
 Validado com **MHL 1.13.0** e Python 3. Python é usado para executar o comando de
@@ -232,13 +237,22 @@ agilespec next
 ```
 
 Num terminal, `inception` e `story` já perguntam cada decisão. Em `q` (ou
-Ctrl-D), a sessão fica pausada; `agilespec next` a retoma. O projeto é
+Ctrl-D), a sessão fica pausada; `agilespec next` a retoma.
+
+O comando de testes é do stage Implementation. Quando ele é conhecido — passado com
+`--verify`, ou guardado de uma história anterior —, o CLI o envia no início e nada
+espera por ele. Senão, a história começa sem ele, e o run para ao entrar em
+Implementation, depois que as specs foram aprovadas e publicadas. O `next` então o
+pede (Enter usa o padrão do projeto), e `agilespec input verify_command="..."` o
+informa sem perguntas. Só esse input vai na retomada, e o projeto o guarda para as
+próximas histórias. O projeto é
 `--project`, senão `$AGILESPEC_PROJECT`, senão a pasta atual.
 
 | Comando | O que faz |
 | --- | --- |
 | `inception --brief ARQUIVO` | Propõe as specs globais a partir do brief (arquivo, texto ou `-`) |
-| `story ID [--draft] [--ui] [--db] [--verify CMD]` | Especifica, implementa e consolida a história `ID`; o comando de testes fica guardado para as próximas |
+| `story ID [--draft] [--ui] [--db] [--verify CMD]` | Especifica, implementa e consolida a história `ID`; o comando de testes fica guardado para as próximas, e sem ele o run o pede ao entrar na implementação |
+| `input CHAVE=VALOR ...` | Informa os inputs que uma fase pede ao começar (`verify_command="python3 -m pytest"`); uma chave omitida usa o padrão do projeto |
 | `next` | Mostra a pausa pendente, pergunta a decisão e continua; numa falha, oferece tentar o passo de novo |
 | `status` / `show` | Lista as sessões / mostra de novo a última pausa ou o desfecho |
 | `approve [--dod]` · `revise "feedback" [--specs]` · `reject` | Decidem sem perguntas, para scripts; aprovar a consolidação exige `--dod` |
@@ -294,6 +308,21 @@ Selecione a história do backlog. Use `Draft` para criar/propor specs e `Existin
 (padrão) para ler specs já preparadas. Ambas as opções exigem aprovação humana.
 O comando de verificação é um array JSON de argumentos e deve executar os testes
 reais do projeto; ajuste-o à sua stack.
+
+Cada fase declara os próprios inputs. `project_dir`, `story_id` e `max_attempts` são da
+história inteira. `specification_mode`, `ui_changes` e `database_changes` são do stage
+Specification, e todos têm default. `verify_command` é do stage Implementation. Todos
+podem ser passados de início, como abaixo. Se você omitir `verify_command`, o run pausa
+ao entrar em Implementation, depois que as specs foram aprovadas e publicadas. A saída
+lista então `awaiting_inputs`, e você retoma passando só esse input:
+
+```sh
+mhl run story.mh --session meu-projeto-story1 --resume \
+  --input 'verify_command=["python3","-m","pytest"]'
+```
+
+Uma retomada que ainda não o traz é recusada, e o run continua pausado. Isso exige um
+mhl com inputs por stage; um mais antigo pede todos os inputs no início.
 
 ```sh
 mhl run story.mh --session meu-projeto-story1 \

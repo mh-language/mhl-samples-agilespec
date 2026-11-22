@@ -85,8 +85,31 @@ export tool Specs {
         return true
     }
 
+    // An agent's JSON reply: the text as is, or the body of the first ```
+    // fence in it — models wrap the JSON in one now and then, with prose
+    // around it, despite the prompt asking not to. A line starting with ```
+    // can't occur inside JSON (a string holds no raw newline), so the first
+    // such line after the opening one closes the fence.
+    json_of(raw: string): any {
+        var lines = raw.trim().split("\n").enumerate()
+        var fences = lines.filter((line) -> line.value.trim().starts_with("```"))
+
+        if (fences.size() < 2) {
+            return json.parse(raw.trim())
+        }
+
+        var open = fences[0].index
+        var close = fences[1].index
+        var body = lines
+            .filter((line) -> line.index > open && line.index < close)
+            .map((line) -> line.value)
+            .join("\n")
+
+        return json.parse(body)
+    }
+
     documents(raw: string, allowed: string[], required: string[]): any {
-        var proposal = json.parse(raw)
+        var proposal = self.json_of(raw)
 
         if (!is_object(proposal) || !is_object(proposal?.files)) {
             fail("Expected JSON object with files")
@@ -203,7 +226,7 @@ export tool Specs {
     }
 
     report(raw: string): any {
-        var report = json.parse(raw)
+        var report = self.json_of(raw)
 
         if (!is_object(report)) {
             fail("Expected implementation report object")
@@ -249,7 +272,7 @@ export tool Specs {
         }
 
         var files = self.documents(raw, required, required)
-        var proposal = json.parse(raw)
+        var proposal = self.json_of(raw)
 
         self.string_list(proposal?.discrepancies, "discrepancies")
         self.string_list(proposal?.pending_dod, "pending_dod")

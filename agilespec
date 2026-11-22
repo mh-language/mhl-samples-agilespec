@@ -8,6 +8,7 @@ pergunta a decisão e retoma até a próxima pausa.
     agilespec inception --brief examples/podlite-brief.txt
     agilespec story 1 --draft --verify "python3 -m pytest"
     agilespec next            # revisa e decide a pausa pendente, de forma guiada
+    agilespec input verify_command="python3 -m pytest"   # informa o input que uma fase pede
     agilespec status
 
 O projeto é `--project`, senão $AGILESPEC_PROJECT, senão a pasta atual. O estado
@@ -36,13 +37,19 @@ REFUSED = ("invalid_decision", "invalid_inputs")
 # Statuses a session can be in. "paused" and "failed" can go on; the others ended.
 OPEN = ("paused", "failed")
 LABELS = {
-    "paused": "aguardando decisão",
+    "paused": "aguardando decisão",  # or a stage's inputs: see cmd_status
     "failed": "falhou",
     "done": "concluída",
     "rejected": "rejeitada",
     "discarded": "descartada",
     "stopped": "encerrada",
 }
+# The inputs a stage asks for on entering it (`awaiting_inputs`): how to ask.
+INPUT_TITLES = {
+    "verify_command": "Comando de testes do projeto (ex.: python3 -m pytest)",
+}
+# Inputs the project remembers once given: offered as the default next time.
+REMEMBERED = ("verify_command",)
 STEP_TITLES = {
     "ApproveInception": "Aprovar a iniciação",
     "ApproveSpecification": "Aprovar a especificação",
@@ -226,11 +233,17 @@ def record(project, name, result):
     session = project.sessions[name]
     session["updated"] = time.strftime("%Y-%m-%d %H:%M:%S")
     session.pop("awaiting", None)
+    session.pop("awaiting_inputs", None)
     session.pop("error", None)
     if not result.get("ok", False):
         session["status"] = "failed"
         session["error"] = result.get("error", "")
         session["failed_step"] = result.get("step", "")
+    elif result.get("paused") and result.get("awaiting_inputs"):
+        # Stopped on entering a stage that asks for its own inputs.
+        waiting = result["awaiting_inputs"]
+        session["status"] = "paused"
+        session["awaiting_inputs"] = {"stage": waiting["stage"], "inputs": waiting["inputs"]}
     elif result.get("paused"):
         session["status"] = "paused"
         session["awaiting"] = result["awaiting"]["step"]
@@ -276,6 +289,10 @@ def show_result(project, name, result):
             print(wrap("Specs globais publicadas. Comece uma história com `agilespec story <id>`."))
         return
 
+    if result.get("awaiting_inputs"):
+        show_awaiting_inputs(project, name, result)
+        return
+
     step = result["awaiting"]["step"]
     vars_ = result.get("vars") or {}
     print(yellow(bold(f"⏸ {name} · {STEP_TITLES.get(step, step)}")))
@@ -288,6 +305,57 @@ def show_result(project, name, result):
         print(wrap(relative(project, result.get("pause_reason", ""))))
     for line in review_notes(project, step, vars_):
         print(line)
+
+
+def show_awaiting_inputs(project, name, result):
+    """A run stopped on entering a stage, waiting for that stage's inputs."""
+    waiting = result["awaiting_inputs"]
+    vars_ = result.get("vars") or {}
+    print(yellow(bold(f"⏸ {name} · Informar os inputs da fase {waiting['stage']}")))
+    if waiting["stage"] == "Implementation" and vars_.get("story_folder"):
+        print(wrap(f"As specs foram aprovadas e publicadas em {relative(project, vars_['story_folder'])}; nada foi implementado ainda."))
+    for key in waiting["inputs"]:
+        known = remembered(project, key)
+        default = f" {dim('(padrão do projeto: ' + show_value(known) + ')')}" if known is not None else ""
+        print(wrap(f"{bold(key + ':')} {INPUT_TITLES.get(key, 'input da fase')}{default}"))
+    pairs = " ".join(f'{key}="..."' for key in waiting["inputs"])
+    session = "" if len([n for n, s in project.sessions.items() if s["status"] in OPEN]) <= 1 else f" -s {name}"
+    print(wrap(dim(f"Informe com `agilespec next{session}` ou `agilespec input{session} {pairs}`.")))
+
+
+def remembered(project, key):
+    """The value the project remembers for input `key`, None when none."""
+    return project.state.get(key) if key in REMEMBERED else None
+
+
+def show_value(value):
+    if isinstance(value, list) and all(isinstance(v, str) for v in value):
+        return shlex.join(value)
+    return value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+
+
+def parse_input(key, text, schema):
+    """An input's value from what the user typed, by its declared type."""
+    kind = (schema or {}).get("type")
+    text = text.strip()
+    if key == "verify_command":
+        return parse_verify(text)
+    if kind == "array":
+        if text.startswith("["):
+            return json.loads(text)
+        return shlex.split(text)
+    if kind == "boolean":
+        if text.lower() in ("true", "s", "sim", "y", "yes"):
+            return True
+        if text.lower() in ("false", "n", "não", "nao", "no"):
+            return False
+        raise CliError(f"{key} deve ser true ou false.")
+    if kind in ("number", "integer"):
+        try:
+            return json.loads(text)
+        except ValueError:
+            raise CliError(f"{key} deve ser um número.")
+    return text
 
 
 def relative(project, text):
@@ -441,6 +509,44 @@ def ask_decision(result):
     return decision
 
 
+def ask_inputs(project, result):
+    """Asks for the inputs the stage waits for; Enter takes the project's default."""
+    waiting = result["awaiting_inputs"]
+    props = (waiting.get("schema") or {}).get("properties") or {}
+    values = {}
+    for key in waiting["inputs"]:
+        known = remembered(project, key)
+        label = INPUT_TITLES.get(key, key)
+        hint = f" [{show_value(known)}]" if known is not None else ""
+        while True:
+            answer = ask(f"{label}{hint}: ")
+            if not answer and known is not None:
+                values[key] = known
+                break
+            if not answer:
+                continue
+            try:
+                values[key] = parse_input(key, answer, props.get(key))
+                break
+            except (CliError, ValueError) as e:
+                print(red(f"  {e}"))
+    return values
+
+
+def give_inputs(project, name, values):
+    """Resumes a run paused for a stage's inputs with `values`: only those are
+    sent. A remembered one becomes the project's default for the next stories."""
+    resumed = run_mhl(project, name, resume=True, inputs=values)
+    if resumed is not None:
+        session = project.sessions[name]
+        session.setdefault("inputs", {}).update(values)
+        for key in REMEMBERED:
+            if key in values:
+                project.state[key] = values[key]
+        project.save()
+    return resumed
+
+
 def retry(project, name):
     """Runs a failed step again. A run that failed at its first step has no
     checkpoint yet: it takes its inputs again."""
@@ -468,12 +574,18 @@ def guide(project, name, result, once=False):
             return
         print()
         try:
-            decision = ask_decision(result)
+            if result.get("awaiting_inputs"):
+                values, decision = ask_inputs(project, result), None
+            else:
+                values, decision = None, ask_decision(result)
         except Quit:
             print(dim(f"\nSessão {name} continua pausada. Retome com `agilespec next -s {name}`."))
             return
         print()
-        resumed = run_mhl(project, name, resume=True, decision=decision)
+        if values is not None:
+            resumed = give_inputs(project, name, values)
+        else:
+            resumed = run_mhl(project, name, resume=True, decision=decision)
         if resumed is None:
             continue  # refused before running: ask again
         result = resumed
@@ -536,16 +648,18 @@ def cmd_story(project, args):
         project.state["verify_command"] = verify  # the project's default from now on
     else:
         verify = project.state.get("verify_command")
-        if not verify:
-            raise CliError("Informe o comando de testes do projeto na primeira história: --verify \"python3 -m pytest\".")
     inputs = {
         "project_dir": str(project.root),
         "story_id": story_id,
-        "verify_command": verify,
         "specification_mode": "Draft" if args.draft else "Existing",
         "ui_changes": args.ui,
         "database_changes": args.db,
     }
+    # The test command is the Implementation stage's input. Known (given now,
+    # or remembered from an earlier story), it goes up front and nothing waits
+    # for it; otherwise the run asks for it on entering Implementation.
+    if verify:
+        inputs["verify_command"] = verify
     if args.max_attempts:
         inputs["max_attempts"] = args.max_attempts
     name = project.new_session_name(f"story-{story_id}")
@@ -566,7 +680,10 @@ def cmd_status(project, args):
     for name, s in sessions.items():
         status = s["status"]
         label = LABELS.get(status, status)
-        if status == "paused":
+        if status == "paused" and s.get("awaiting_inputs"):
+            waiting = s["awaiting_inputs"]
+            label = yellow(f"aguardando inputs: {waiting['stage']} ({', '.join(waiting['inputs'])})")
+        elif status == "paused":
             label = yellow(f"{label}: {STEP_TITLES.get(s.get('awaiting'), s.get('awaiting'))}")
         elif status == "failed":
             label = red(f"{label} em {s.get('failed_step', '?')}")
@@ -604,6 +721,10 @@ def decide(project, args, make):
     name, result = current(project, args)
     if project.sessions[name]["status"] != "paused":
         raise CliError(f"A sessão {name} não está aguardando decisão ({LABELS.get(project.sessions[name]['status'])}).")
+    if result.get("awaiting_inputs"):
+        waiting = result["awaiting_inputs"]
+        pairs = " ".join(f'{key}="..."' for key in waiting["inputs"])
+        raise CliError(f"A sessão {name} aguarda os inputs da fase {waiting['stage']}, não uma decisão: `agilespec input {pairs}`.")
     decision = make(result["awaiting"], result.get("awaiting", {}).get("schema") or {})
     resumed = run_mhl(project, name, resume=True, decision=decision)
     if resumed is None:
@@ -659,6 +780,41 @@ def cmd_decide(project, args):
     decide(project, args, lambda awaiting, schema: value)
 
 
+def cmd_input(project, args):
+    """Gives the inputs the stage a session stopped at waits for."""
+    name, result = current(project, args)
+    waiting = result.get("awaiting_inputs")
+    if project.sessions[name]["status"] != "paused" or not waiting:
+        raise CliError(f"A sessão {name} não está aguardando inputs de uma fase.")
+    props = (waiting.get("schema") or {}).get("properties") or {}
+    values = {}
+    for pair in args.pairs:
+        key, sep, text = pair.partition("=")
+        if not sep:
+            raise CliError(f"Use chave=valor: {pair}")
+        if key not in waiting["inputs"]:
+            raise CliError(f"A fase {waiting['stage']} não pede {key}; ela aguarda {', '.join(waiting['inputs'])}.")
+        values[key] = parse_input(key, text, props.get(key))
+    # What was not given: the project's default, if it remembers one.
+    missing = []
+    for key in waiting["inputs"]:
+        if key not in values:
+            known = remembered(project, key)
+            if known is None:
+                missing.append(key)
+            else:
+                values[key] = known
+    if missing:
+        raise CliError(f"Falta informar {', '.join(missing)}: `agilespec input {' '.join(k + '=...' for k in missing)}`.")
+    resumed = give_inputs(project, name, values)
+    if resumed is None:
+        raise CliError("Os inputs foram recusados; a sessão continua na mesma pausa.")
+    if guided(args):
+        guide(project, name, resumed)
+    else:
+        show_result(project, name, resumed)
+
+
 def cmd_redo(project, args):
     name = project.pick(args.session)
     session = project.sessions[name]
@@ -710,7 +866,7 @@ def parser():
     c.add_argument("--draft", action="store_true", help="propor as specs da história (padrão: ler as já preparadas)")
     c.add_argument("--ui", action="store_true", help="a história muda a interface (exige views.md)")
     c.add_argument("--db", action="store_true", help="a história muda o banco (exige tables.md)")
-    c.add_argument("--verify", help="comando de testes do projeto, guardado para as próximas histórias")
+    c.add_argument("--verify", help="comando de testes do projeto, guardado para as próximas histórias (sem ele e sem um guardado, é pedido ao entrar na implementação)")
     c.add_argument("--max-attempts", type=int, help="máximo de implementações (padrão 3)")
     guide_arg(c)
     c.set_defaults(run=cmd_story)
@@ -747,6 +903,12 @@ def parser():
     session_arg(c)
     c.add_argument("decision", help="JSON do tipo que a pausa espera")
     c.set_defaults(run=cmd_decide)
+
+    c = sub.add_parser("input", help="informa os inputs que uma fase pede ao começar (ex.: verify_command=\"python3 -m pytest\")")
+    c.add_argument("pairs", nargs="*", metavar="chave=valor", help="sem valor, usa o padrão do projeto")
+    session_arg(c)
+    guide_arg(c)
+    c.set_defaults(run=cmd_input)
 
     c = sub.add_parser("redo", help="refaz uma fase da história (Specification, Implementation, Consolidation)")
     c.add_argument("stage")

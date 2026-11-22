@@ -1,4 +1,4 @@
-import {Specs, SpecificationMode} from "lib/contracts.mh"
+import {Specs} from "lib/contracts.mh"
 
 import "story/specification.mh"
 import "story/implementation.mh"
@@ -7,14 +7,16 @@ import "story/consolidation.mh"
 export partial workflow AgileSpecStory {
     description: "Entrega uma história AgileSpec com especificação aprovada, implementação, testes, revisão humana e consolidação."
 
+    // Inputs da história inteira, pedidos ao iniciar o run. Cada fase declara
+    // os seus no próprio fragmento: Specification as opções das specs,
+    // Implementation o comando de testes, que o run só pede ao entrar nela
+    // (`awaiting_inputs`), depois das specs aprovadas.
+
+    /// project_dir: path to the AgileSpec project folder, which must exist and contain a valid AgileSpec project structure.
     input project_dir: string
+    /// story_id: the story number to be delivered, which must be a pending story in the project backlog.
     input story_id: string
-    input verify_command: string[]
-
-    input specification_mode: SpecificationMode = SpecificationMode.Existing
-    input ui_changes: bool = false
-    input database_changes: bool = false
-
+    /// max_attempts: the maximum number of times a story can be revised, which must be an integer between 1 and 20.
     input max_attempts: number = 3
 
     var project_folder = ""
@@ -54,10 +56,6 @@ export partial workflow AgileSpecStory {
 
         if (!dir.exists(project_dir)) {
             fail("project_dir must be an existing directory")
-        }
-
-        if (verify_command.is_empty()) {
-            fail("verify_command is required")
         }
 
         if (max_attempts < 1 || max_attempts > 20 || !"${max_attempts}".matches("[1-9][0-9]*")) {

@@ -20,10 +20,10 @@ mhl run "$workflow_dir/inception.mh" --dry-run \
   --input project_dir=/tmp/example \
   --input 'brief=Example backlog'
 
+# verify_command is the Implementation stage's input: not needed to start.
 mhl run "$workflow_dir/story.mh" --dry-run \
   --input project_dir=/tmp/example \
-  --input story_id=1 \
-  --input 'verify_command=["python3","-m","pytest"]'
+  --input story_id=1
 
 python3 "$workflow_dir/tests/resume_test.py"
 python3 "$workflow_dir/tests/cli_test.py"

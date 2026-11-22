@@ -57,6 +57,13 @@ def run(repo, file, session, resume=False, expect_failure=False, decision=None, 
     return json.loads(proc.stdout)
 
 
+def awaiting_inputs(result, stage, *inputs):
+    assert result.get("paused") is True, result
+    assert result["awaiting_inputs"]["stage"] == stage, result
+    assert result["awaiting_inputs"]["inputs"] == list(inputs), result
+    assert "awaiting" not in result, result
+
+
 def paused(result, step):
     assert result.get("paused") is True, result
     assert result["executed"][-1] == step, result
@@ -194,12 +201,47 @@ with tempfile.TemporaryDirectory(prefix="agilespec-mhl-resume-") as tmp:
         "reopen",
         project_dir=str(repo),
         story_id="1",
-        verify_command=command,
         expect_failure=True,
     )
     assert "already complete" in failure, failure
 
+    # Each phase asks for its own inputs: story 2 starts with the story's only
+    # (plus a Specification option, given up front), and the test command is
+    # asked for on entering Implementation, once the specs are approved.
+    story2 = run(
+        repo,
+        "story.mh",
+        "story2",
+        project_dir=str(repo),
+        story_id="2",
+        specification_mode="Draft",
+    )
+    paused(story2, "ApproveSpecification")
+
+    specs = run(repo, "story.mh", "story2", resume=True, decision={"approved": True})
+    awaiting_inputs(specs, "Implementation", "verify_command")
+    assert specs["executed"][-1] == "PublishStorySpecs", specs
+    assert (repo / "AgileSpec/stories/story2/acceptance.md").exists()
+
+    # Resuming without it is refused before anything runs; the run stays paused.
+    missing = run(repo, "story.mh", "story2", resume=True, expect_failure=True)
+    assert "invalid_inputs" in missing and '"stage": "Implementation"' in missing, missing
+
+    # A decision does not answer an input gate either.
+    decided = run(
+        repo, "story.mh", "story2", resume=True, decision={"action": "Approve"}, expect_failure=True
+    )
+    assert "invalid_decision" in decided, decided
+
+    # Given only that input, the phase runs up to the human code review.
+    coded = run(repo, "story.mh", "story2", resume=True, verify_command=command)
+    paused(coded, "ReviewImplementation")
+    assert coded["executed"][0] == "StartAttempt", coded
+    assert coded["vars"]["attempt"] == 1
+    assert "2. [ ]" in backlog(repo)
+
 print(
     "CLI integration: inception + story pause/resume with typed decisions, specification rework, "
-    "refused decisions, redoing a stage, consolidation and completion passed."
+    "refused decisions, redoing a stage, consolidation and completion, "
+    "and a stage asking for its own inputs passed."
 )

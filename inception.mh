@@ -5,8 +5,15 @@ import {Specs} from "lib/contracts.mh"
 export workflow AgileSpecInception {
     description: "Prepara as cinco especificações globais leves e aguarda aprovação humana antes de publicá-las."
 
+    /// project_dir: path to the AgileSpec project folder, which must exist and contain a valid AgileSpec project structure.
     input project_dir: string
+    /// brief: a product brief and prioritized story backlog, which must be non-empty —
+    /// the text itself, or the path of a file holding it (relative to where mhl runs,
+    /// e.g. examples/podlite-brief.txt).
     input brief: string
+
+    // The brief's text: brief itself, or the file it names.
+    var brief_text = ""
 
     var project_folder = ""
     var review_folder = ""
@@ -25,7 +32,14 @@ export workflow AgileSpecInception {
             fail("project_dir must be an existing directory")
         }
 
-        if (brief.trim().is_empty()) {
+        // A path is one short line naming a file; anything else is the text.
+        var path = brief.trim()
+        self.brief_text = brief
+        if (!path.contains("\n") && path.size() < 256 && fs.exists(path) && !dir.exists(path)) {
+            self.brief_text = fs.read(path)
+        }
+
+        if (brief_text.trim().is_empty()) {
             fail("A product brief and prioritized story backlog are required")
         }
 
@@ -36,7 +50,7 @@ export workflow AgileSpecInception {
     }
 
     step DraftInception timeout 12m {
-        var data = json.stringify({project_dir, brief, existing_project: original})
+        var data = json.stringify({project_dir, brief: brief_text, existing_project: original})
 
         var raw = SpecAuthor.run(repo: project_dir, prompt: InceptionPrompt(data: data))
 
@@ -47,6 +61,8 @@ export workflow AgileSpecInception {
     }
 
     step ApproveInception {
+        /// approved: marque para aprovar a proposta e publicar os cinco documentos em
+        /// AgileSpec/project; deixe desmarcado para descartá-la sem alterar nada.
         var approved = pause(
             "Revise ${review_folder}/project-proposal.json. " +
             "Retome com --decision true para aprovar a iniciação, ou false para descartá-la.",
